@@ -1,0 +1,31 @@
+command:
+  - "gunicorn"
+  - "server.app:app"
+  - "-c"
+  - "gunicorn_conf.py"
+
+env:
+  # Persistence: Lakebase Postgres. PGHOST/PGUSER/PGPORT/PGDATABASE are auto-injected
+  # by the runtime when the `database` resource is attached. ENDPOINT_NAME must be the
+  # endpoint PATH, not the instance name (set after the instance is created).
+  - name: DATABASE_ENV
+    value: "postgres"
+  - name: ENDPOINT_NAME
+    value: "projects/groundtruth-db/branches/production/endpoints/primary"
+  - name: LAKEBASE_SCHEMA_NAME
+    value: "groundtruth"
+  # Foundation model used by the AI judges and Genie synthesis.
+  - name: SERVING_ENDPOINT
+    value: "databricks-claude-sonnet-5"
+  # Per-project MLflow experiments are created under this workspace folder.
+  - name: MLFLOW_EXPERIMENT_BASE
+    value: "/Shared/groundtruth"
+  # Workspace source path of the deployed app — used by the SP background-generation job
+  # (jobs/runs/submit points its Python task at <APP_SOURCE_PATH>/server/jobs/generate_task.py).
+  - name: APP_SOURCE_PATH
+    value: "/Workspace/Users/gaurav.khatri@databricks.com/groundtruth"
+  # Phase 3 intake: MLflow experiment access + warehouse for UC trace search.
+  - name: MLFLOW_EXPERIMENT_ID
+    valueFrom: "experiment"
+  - name: MLFLOW_TRACING_SQL_WAREHOUSE_ID
+    valueFrom: "sql-warehouse"

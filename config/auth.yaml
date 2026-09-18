@@ -1,0 +1,7 @@
+# Preconfigured facilitators. Passwords are SHA-256 hex of the plaintext.
+# Testers are NOT listed here — they self-serve by email and must be invited to a project.
+facilitators:
+  - email: gaurav.khatri@databricks.com
+    name: Gaurav Khatri
+    # plaintext: GroundTruth!2026
+    password_sha256: da86bebc723d6b14ca0a44cba6597bce083e065708bf187661a66b365fc79bc2

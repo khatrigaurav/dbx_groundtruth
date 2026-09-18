@@ -1,0 +1,57 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 40% 98%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --primary: 244 62% 54%;            /* indigo */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+    --accent: 244 62% 96%;
+    --accent-foreground: 244 62% 40%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 152 60% 36%;
+    --success-foreground: 0 0% 100%;
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 244 62% 54%;
+    --radius: 0.65rem;
+  }
+
+  * { border-color: hsl(var(--border)); }
+
+  /* Compact markdown prose (Genie answers / model output) */
+  .md > :first-child { margin-top: 0; }
+  .md > :last-child { margin-bottom: 0; }
+  .md h1, .md h2, .md h3 { font-weight: 600; line-height: 1.25; margin: 0.75em 0 0.35em; }
+  .md h1 { font-size: 1.05rem; }
+  .md h2 { font-size: 1rem; }
+  .md h3 { font-size: 0.95rem; }
+  .md p { margin: 0.4em 0; }
+  .md ul, .md ol { margin: 0.4em 0; padding-left: 1.25rem; }
+  .md ul { list-style: disc; }
+  .md ol { list-style: decimal; }
+  .md li { margin: 0.15em 0; }
+  .md code { background: hsl(var(--muted)); padding: 0.1em 0.3em; border-radius: 4px; font-size: 0.85em; }
+  .md pre { background: hsl(var(--muted)); padding: 0.6rem 0.75rem; border-radius: 8px; overflow-x: auto; margin: 0.5em 0; }
+  .md pre code { background: none; padding: 0; }
+  .md a { color: hsl(var(--primary)); text-decoration: underline; }
+  .md table { border-collapse: collapse; margin: 0.5em 0; display: block; overflow-x: auto; }
+  .md th, .md td { border: 1px solid hsl(var(--border)); padding: 0.3rem 0.5rem; text-align: left; }
+  .md blockquote { border-left: 3px solid hsl(var(--border)); padding-left: 0.75rem; color: hsl(var(--muted-foreground)); margin: 0.5em 0; }
+  .md strong { font-weight: 600; }
+  body {
+    background: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  html, body, #root { height: 100%; }
+}

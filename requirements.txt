@@ -1,0 +1,12 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+gunicorn>=22.0.0
+sqlalchemy>=2.0.0
+alembic>=1.13.0
+pg8000>=1.31.0
+databricks-sdk>=0.81.0
+mlflow>=3.10.0
+openai>=1.52.0
+pydantic>=2.0.0
+python-multipart>=0.0.9
+PyYAML>=6.0

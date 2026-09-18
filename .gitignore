@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+*.db
+*.sqlite
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Build outputs — keep client/dist for deployment (do NOT ignore it)
+client/node_modules/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Databricks
+.databricks/
+
+# OS
+.DS_Store
