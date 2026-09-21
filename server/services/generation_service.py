@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from sqlalchemy.orm import Session
@@ -25,10 +26,12 @@ from server.services import experiment_service as EXP
 
 logger = logging.getLogger(__name__)
 
-# A "running" row not updated within this window is considered orphaned (worker died — e.g. an
-# app restart/deploy). The worker heartbeats updated_at after each question, so a healthy run
-# refreshes every ~1–2 min.
+# A "running" row not refreshed within this window is considered orphaned (worker died — e.g.
+# an app restart/deploy). The cancel-watcher refreshes updated_at every _LIVENESS_BEAT_S while a
+# run is alive, so liveness is independent of how long individual Genie questions take (a slow
+# batch won't be falsely reaped).
 _STALE_SECONDS = 360
+_LIVENESS_BEAT_S = 30
 
 # How many questions to run through Genie at once. Genie polling is I/O-bound, so concurrency
 # cuts wall-clock ~linearly until the Genie space's SQL warehouse or the serving endpoint
@@ -161,13 +164,23 @@ def _worker(project_id: str, item_ids: list[str], exp_id: str | None, mode: str,
 
     def _watch_cancel() -> None:
         wdb = SessionLocal()
+        last_beat = time.monotonic()
         try:
             while not stop_watch.wait(2.0):
                 wdb.expire_all()
                 run = wdb.query(GenerationRun).filter(GenerationRun.project_id == project_id).first()
-                if run is not None and run.status == "cancelling":
+                if run is None:
+                    continue
+                if run.status == "cancelling":
                     cancel_event.set()
                     return
+                # Liveness: refresh updated_at periodically so a slow-but-healthy run (long Genie
+                # answers, few completions) isn't mistaken for an orphaned/dead worker and reaped.
+                now = time.monotonic()
+                if run.status == "running" and now - last_beat >= _LIVENESS_BEAT_S:
+                    run.updated_at = _dt.datetime.now(_dt.timezone.utc)
+                    wdb.commit()
+                    last_beat = now
         finally:
             wdb.close()
 

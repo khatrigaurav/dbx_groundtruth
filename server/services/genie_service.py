@@ -26,7 +26,7 @@ from server.database import Item, ItemSource, Response
 
 logger = logging.getLogger(__name__)
 
-POLL_TIMEOUT_S = int(os.environ.get("GENIE_POLL_TIMEOUT_S", "300"))
+POLL_TIMEOUT_S = int(os.environ.get("GENIE_POLL_TIMEOUT_S", "600"))  # some Genie One answers are slow
 
 # Transient-error backoff for Genie MCP calls, so higher generation concurrency degrades
 # gracefully (retry) instead of failing questions when the endpoint/warehouse throttles.

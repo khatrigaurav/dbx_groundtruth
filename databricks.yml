@@ -106,6 +106,10 @@ resources:
           # see throttling. Bounded at 25 in code.
           - name: GENERATION_CONCURRENCY
             value: "10"
+          # Max seconds to wait for a single Genie One answer before giving up on it. Some
+          # questions are slow; raise this if you see questions timing out.
+          - name: GENIE_POLL_TIMEOUT_S
+            value: "600"
           # Workspace path of the synced source — used by the SP background-generation
           # job. ${workspace.file_path} is where the bundle syncs, so this is portable
           # (no hardcoded /Workspace/Users/<email>/... path).
