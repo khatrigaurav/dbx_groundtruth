@@ -245,8 +245,8 @@ export default function ProjectDetail() {
               <button type="button" disabled={generating} onClick={() => setGenMode('user')}
                 className={cn('rounded-lg border p-3 text-left transition-colors disabled:opacity-60',
                   genMode === 'user' ? 'border-primary bg-accent ring-1 ring-primary/20' : 'hover:bg-muted')}>
-                <div className="flex items-center gap-1.5 text-sm font-medium"><UserIcon className="h-4 w-4" /> Run as me <span className="rounded bg-amber-100 px-1 text-[10px] text-amber-800">needs setup</span></div>
-                <div className="text-xs text-muted-foreground">Uses your data access + shows in your Genie One — but the Genie endpoint currently rejects the app's user token (403). Being worked on.</div>
+                <div className="flex items-center gap-1.5 text-sm font-medium"><UserIcon className="h-4 w-4" /> Run as me</div>
+                <div className="text-xs text-muted-foreground">Runs on your behalf — uses your data access and shows in your Genie One history.</div>
               </button>
             </div>
             <Button disabled={busy || generating || stats.pending === 0} onClick={generate}>
