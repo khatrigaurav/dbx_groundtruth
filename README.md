@@ -2,7 +2,7 @@
 
 A simple answer-key evaluation app: import questions + expected answers, collect agent
 responses, and grade them with an **LLM correctness judge** and **human reviewers** — then
-compare the two. Built for Samsara to own and run as a customer-facing tool.
+compare the two. 
 
 Deliberately simpler than VibeScaler: no discovery/rubric/IRR/alignment pipeline. Just
 **Project → Items (question + expected answer + responses) → Judgments (llm | human)**.
