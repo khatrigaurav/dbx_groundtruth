@@ -35,6 +35,16 @@ _HTTP_BACKOFF_BASE = 1.0
 _HTTP_BACKOFF_CAP = 20.0
 _RETRY_STATUS = (429, 500, 502, 503, 504)
 
+# Poll cadence for Genie answers. The wait between polls is sliced into short ticks so a
+# cancel is honored within ~_CANCEL_TICK_S instead of after a full poll interval.
+_POLL_INTERVAL_S = 5.0
+_CANCEL_TICK_S = 0.5
+
+
+class GenerationCancelled(Exception):
+    """Raised inside a Genie round-trip when a cancel has been signalled, so an in-flight
+    question aborts promptly instead of polling to completion/timeout."""
+
 SYNTH_SYSTEM = (
     "You are a data analyst. Answer the user's question using ONLY the Genie data result "
     "provided (it is grounded in the company's governed data). Be concise, lead with the "
@@ -112,8 +122,15 @@ def _tool_text(result: dict) -> str:
     return result.get("content", [{}])[0].get("text", "")
 
 
-def ask_genie(question: str, token: str, mcp_url: str, poll_timeout_s: int | None = None) -> dict:
-    """Full Genie One MCP round-trip. Returns {answer_markdown, generated_sql}."""
+def ask_genie(question: str, token: str, mcp_url: str, poll_timeout_s: int | None = None,
+              cancel_check=None) -> dict:
+    """Full Genie One MCP round-trip. Returns {answer_markdown, generated_sql}.
+
+    If `cancel_check` (a no-arg callable) is given, it's polled throughout the wait loop and the
+    round-trip aborts with GenerationCancelled the moment it returns True — so a cancel stops
+    in-flight questions instead of letting them poll to completion/timeout."""
+    if cancel_check and cancel_check():
+        raise GenerationCancelled()
     g = GenieMCP(token, mcp_url)
     res = g.call_tool("genie_ask", {"question": question})
     sc = res.get("structuredContent", {})
@@ -122,13 +139,21 @@ def ask_genie(question: str, token: str, mcp_url: str, poll_timeout_s: int | Non
     deadline = time.time() + (poll_timeout_s or POLL_TIMEOUT_S)
     text = ""
     while time.time() < deadline:
+        if cancel_check and cancel_check():
+            raise GenerationCancelled()
         res = g.call_tool("genie_poll_response", {"conversation_id": cid, "response_id": rid})
         text = _tool_text(res)
         if re.search(r"\*\*Status:\*\*\s*completed", text, re.I):
             break
         if re.search(r"\*\*Status:\*\*\s*failed", text, re.I):
             raise RuntimeError("Genie response failed")
-        time.sleep(5)
+        # Slice the wait so a cancel is honored within ~_CANCEL_TICK_S, not a whole poll interval.
+        waited = 0.0
+        while waited < _POLL_INTERVAL_S:
+            if cancel_check and cancel_check():
+                raise GenerationCancelled()
+            time.sleep(_CANCEL_TICK_S)
+            waited += _CANCEL_TICK_S
     else:
         raise TimeoutError(f"Genie poll timed out after {poll_timeout_s or POLL_TIMEOUT_S}s")
     sql = "\n".join(re.findall(r"```sql\n(.*?)```", text, re.S)).strip()
@@ -227,10 +252,12 @@ def run_genie_for_project(db: Session, project_id: str, questions: list[dict],
     return {"items_created": created, "errors": errors[:5], "detail": detail}
 
 
-def answer_for_question(question: str, token: str, mcp_url: str, model: str) -> dict:
+def answer_for_question(question: str, token: str, mcp_url: str, model: str,
+                        cancel_check=None) -> dict:
     """Network-only: run ONE question through Genie + synthesis. No DB, no MLflow — safe to
-    run concurrently across a thread pool. Returns {answer, generated_sql}."""
-    bundle = ask_genie(question, token, mcp_url)
+    run concurrently across a thread pool. `cancel_check` aborts an in-flight Genie poll.
+    Returns {answer, generated_sql}."""
+    bundle = ask_genie(question, token, mcp_url, cancel_check=cancel_check)
     answer = _synthesize(question, bundle["answer_markdown"], model)
     return {"answer": answer, "generated_sql": bundle.get("generated_sql", "")}
 

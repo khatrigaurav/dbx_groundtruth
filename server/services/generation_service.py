@@ -60,18 +60,10 @@ def _write_run(db: Session, project_id: str, **fields) -> None:
     db.commit()
 
 
-def _cancel_requested(db: Session, project_id: str) -> bool:
-    """Fresh read of the run status so a cancel written by another gunicorn worker/session is
-    visible to the worker thread mid-run."""
-    db.expire_all()
-    run = _get_run(db, project_id)
-    return run is not None and run.status == "cancelling"
-
-
 def request_cancel(db: Session, project_id: str) -> dict:
-    """Signal an in-progress run to stop. The worker checks this between questions, starts no
-    new ones, and marks the run 'cancelled'. Questions already in flight finish in the
-    background but their answers are discarded."""
+    """Signal an in-progress run to stop. A watcher thread in the worker picks this up and
+    flips an in-memory event that aborts in-flight Genie polls, so the run stops within a
+    couple of seconds and is marked 'cancelled'."""
     run = _get_run(db, project_id)
     if run is None or run.status not in ("running", "cancelling"):
         return {"status": (run.status if run else "idle"),
@@ -159,6 +151,29 @@ def _worker(project_id: str, item_ids: list[str], exp_id: str | None, mode: str,
     get_engine()
     assert SessionLocal is not None
     db = SessionLocal()
+
+    # A cancel is written to the DB row from another request/gunicorn worker. A watcher thread
+    # polls that (on its OWN session — pool threads must never touch `db`) and flips an in-memory
+    # event; the event is checked both between questions and *inside* each Genie poll loop, so a
+    # cancel stops in-flight questions within ~2s rather than after their poll completes.
+    cancel_event = threading.Event()
+    stop_watch = threading.Event()
+
+    def _watch_cancel() -> None:
+        wdb = SessionLocal()
+        try:
+            while not stop_watch.wait(2.0):
+                wdb.expire_all()
+                run = wdb.query(GenerationRun).filter(GenerationRun.project_id == project_id).first()
+                if run is not None and run.status == "cancelling":
+                    cancel_event.set()
+                    return
+        finally:
+            wdb.close()
+
+    watcher = threading.Thread(target=_watch_cancel, daemon=True)
+    watcher.start()
+
     try:
         # Snapshot the questions to run as plain tuples BEFORE fanning out — ORM objects and the
         # db session must never cross threads.
@@ -177,7 +192,10 @@ def _worker(project_id: str, item_ids: list[str], exp_id: str | None, mode: str,
         def _fetch(row: tuple[str, str]):
             iid, question = row
             try:
-                return iid, G.answer_for_question(question, token, mcp_url, model), None
+                return iid, G.answer_for_question(question, token, mcp_url, model,
+                                                  cancel_check=cancel_event.is_set), None
+            except G.GenerationCancelled:
+                return iid, None, "__cancelled__"
             except Exception as e:  # noqa: BLE001
                 logger.warning("Genie generate failed for %r: %s", question[:60], e)
                 return iid, None, f"{question[:40]}: {e}"
@@ -189,15 +207,15 @@ def _worker(project_id: str, item_ids: list[str], exp_id: str | None, mode: str,
         try:
             futures = [pool.submit(_fetch, row) for row in pending]
             for fut in as_completed(futures):
-                # Between questions, honor a cancel requested from any worker/session: start no
-                # more, drop in-flight results, mark cancelled.
-                if _cancel_requested(db, project_id):
+                if cancel_event.is_set():  # cancel: start no more, drop in-flight, mark cancelled
                     pool.shutdown(wait=False, cancel_futures=True)
                     _write_run(db, project_id, status="cancelled", generated=generated,
                                detail=f"Cancelled. Generated {generated} answer(s) before stopping.",
                                errors=json.dumps(errs) if errs else None)
                     return
                 iid, res, err = fut.result()
+                if err == "__cancelled__":  # aborted in-flight; the event check above handles the rest
+                    continue
                 if err:
                     errs.append(err)
                 else:
@@ -228,4 +246,5 @@ def _worker(project_id: str, item_ids: list[str], exp_id: str | None, mode: str,
         logger.exception("generation worker failed for project %s", project_id)
         _write_run(db, project_id, status="error", detail=str(e), errors=json.dumps([str(e)]))
     finally:
+        stop_watch.set()  # release the cancel watcher
         db.close()
