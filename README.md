@@ -16,11 +16,7 @@ Deliberately simpler than VibeScaler: no discovery/rubric/IRR/alignment pipeline
 ## Deployment
 
 Deploy to **any Databricks workspace** as a Databricks App via the **Asset Bundle**
-(`databricks.yml`): one command creates the Lakebase instance and MLflow experiment, binds
-them (plus the warehouse and serving endpoint) to the app, syncs the source, and deploys.
-Nothing is workspace-specific in the repo — the host comes from your CLI profile and the
-per-workspace values are bundle variables. That is what makes the **Phase 4 handover to
-Samsara a config edit, not a code edit**.
+(`databricks.yml`).
 
 ### 0. Prerequisites
 - Databricks CLI **v0.265.0+** (`database_instances` support). Check: `databricks --version`.
