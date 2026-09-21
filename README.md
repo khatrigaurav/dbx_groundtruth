@@ -41,7 +41,7 @@ via `/auth/whoami`). Locally, `DEV_FACILITATOR_EMAIL` stands in for the SSO iden
 for attribution), but membership is no longer an access gate.
 
 ## Data sources (intake)
-- **CSV answer sheet** — columns (case-insensitive): `question` (required) · `expected_answer` · `response` · `model`
+- **Answer sheet (pipe-delimited)** — `|`-separated columns (case-insensitive): `question` (required) · `expected_answer` · `response` · `model`. Pipe-delimited (not comma) so questions/answers can contain commas without quoting. Accepts `.csv`/`.txt`/`.psv`.
 - **Genie One (MCP)** — one question per line; optional answer key as `question | expected`. Runs each through
   the workspace Genie MCP server and synthesizes a grounded answer. (App SP needs SELECT on the queried UC data.)
 - **MLflow experiment** — enter an experiment id + max traces; imports request→Item, response→Response.

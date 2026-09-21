@@ -80,7 +80,7 @@ export default function ProjectDetail() {
   const toggleStep = (key: string) => { userToggled.current = true; setOpenStep(openStep === key ? null : key) }
 
   async function upload() {
-    const f = fileRef.current?.files?.[0]; if (!f) { toast.error('Choose a CSV first'); return }
+    const f = fileRef.current?.files?.[0]; if (!f) { toast.error('Choose a file first'); return }
     setBusy(true)
     try { const r = await api.uploadCsv(id, f); toast.success(r.detail || 'Imported'); load() }
     catch (e) { toast.error((e as Error).message) } finally { setBusy(false); if (fileRef.current) fileRef.current.value = '' }
@@ -215,16 +215,16 @@ export default function ProjectDetail() {
 
       <ol className="space-y-3">
         <Step n={1} title="Add questions" active={activeStep === 'data'} done={done.data}
-          desc="Upload a CSV of questions and their known-correct answers (the answer key)."
+          desc="Upload a pipe-delimited file of questions and their known-correct answers (the answer key)."
           status={stats.total ? `${stats.total} question${stats.total > 1 ? 's' : ''} · ${stats.withKey} with an answer key` : 'None yet'}
           open={openStep === 'data'} onToggle={() => toggleStep('data')}
           actionLabel={stats.total ? 'Add more' : 'Add questions'}>
           <p className="mb-2 flex items-center gap-1.5 text-sm text-muted-foreground">
-            <FileSpreadsheet className="h-4 w-4" /> Columns: <code>question</code>, <code>expected_answer</code>
-            <span className="text-xs">(a <code>response</code> column is optional — skips generation)</span>
+            <FileSpreadsheet className="h-4 w-4" /> Pipe-delimited columns: <code>question | expected_answer</code>
+            <span className="text-xs">(a <code>response</code> column is optional — skips generation). Use <code>|</code> so commas in text are safe.</span>
           </p>
           <div className="flex gap-2">
-            <Input ref={fileRef} type="file" accept=".csv" className="cursor-pointer p-1.5" />
+            <Input ref={fileRef} type="file" accept=".csv,.txt,.psv" className="cursor-pointer p-1.5" />
             <Button disabled={busy} onClick={upload}><Upload className="h-4 w-4" /> Upload</Button>
           </div>
         </Step>
@@ -267,7 +267,7 @@ export default function ProjectDetail() {
             )}
             {stats.total === 0 && <p className="text-xs text-muted-foreground">Add questions in step 1 first.</p>}
             {stats.total > 0 && stats.pending === 0 && !generating && (
-              <p className="text-xs text-muted-foreground">All {stats.total} questions already have answers — nothing to generate. (Upload a CSV without a <code>response</code> column if you want the app to generate them.)</p>
+              <p className="text-xs text-muted-foreground">All {stats.total} questions already have answers — nothing to generate. (Upload a file without a <code>response</code> column if you want the app to generate them.)</p>
             )}
           </div>
         </Step>

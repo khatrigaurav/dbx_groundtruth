@@ -1,10 +1,15 @@
-"""Data intake. v1: CSV answer-sheet upload. (MLflow + Genie added in Phase 3.)
+"""Data intake. v1: pipe-delimited answer-sheet upload. (MLflow + Genie added in Phase 3.)
 
-CSV columns (case-insensitive; flexible aliases):
-  question | request | input            -> Item.question   (required)
-  expected_answer | expected | answer    -> Item.expected_answer (optional)
-  response | response_preview | output   -> Response.response_text (optional)
-  model | model_name                     -> Response.model_name (optional)
+Files are PIPE-delimited (|), not comma-delimited, so questions/answers/responses can contain
+commas freely without quoting. Columns are named (case-insensitive; flexible aliases):
+  question / request / input             -> Item.question   (required)
+  expected_answer / expected / answer     -> Item.expected_answer (optional)
+  response / response_preview / output    -> Response.response_text (optional)
+  model / model_name                      -> Response.model_name (optional)
+
+Example:
+  question|expected_answer|response|model
+  What is 2+2?|4|The answer, per the model, is 4.|gpt-4
 """
 
 from __future__ import annotations
@@ -54,19 +59,22 @@ def _pick(row: dict, keys) -> str:
 async def upload_csv(project_id: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
     if A.get_project_or_none(db, project_id) is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    if not (file.filename or "").lower().endswith(".csv"):
-        raise HTTPException(status_code=400, detail="File must be a .csv")
+    name = (file.filename or "").lower()
+    if not name.endswith((".csv", ".txt", ".psv")):
+        raise HTTPException(status_code=400, detail="File must be a pipe-delimited .csv, .txt, or .psv")
 
     content = (await file.read()).decode("utf-8-sig")
-    reader = csv.DictReader(io.StringIO(content))
+    # Pipe-delimited: questions/answers/responses may contain commas without quoting.
+    reader = csv.DictReader(io.StringIO(content), delimiter="|")
     if not reader.fieldnames:
-        raise HTTPException(status_code=400, detail="CSV appears to be empty")
+        raise HTTPException(status_code=400, detail="File appears to be empty")
 
     cols = {c.lower().strip() for c in reader.fieldnames}
     if not (cols & set(_Q_COLS)):
         raise HTTPException(
             status_code=400,
-            detail=f"CSV must have a question column (one of {_Q_COLS}). Found: {sorted(cols)}",
+            detail=f"File must be pipe-delimited (|) with a question column (one of {_Q_COLS}). "
+                   f"Found columns: {sorted(cols)} — if you see comma-joined names here, re-save it pipe-delimited.",
         )
 
     items_created = responses_created = 0
