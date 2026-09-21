@@ -12,8 +12,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 import re
 import time
+import urllib.error
 import urllib.request
 import uuid
 
@@ -25,6 +27,13 @@ from server.database import Item, ItemSource, Response
 logger = logging.getLogger(__name__)
 
 POLL_TIMEOUT_S = int(os.environ.get("GENIE_POLL_TIMEOUT_S", "300"))
+
+# Transient-error backoff for Genie MCP calls, so higher generation concurrency degrades
+# gracefully (retry) instead of failing questions when the endpoint/warehouse throttles.
+_HTTP_MAX_RETRIES = int(os.environ.get("GENIE_HTTP_MAX_RETRIES", "4"))
+_HTTP_BACKOFF_BASE = 1.0
+_HTTP_BACKOFF_CAP = 20.0
+_RETRY_STATUS = (429, 500, 502, 503, 504)
 
 SYNTH_SYSTEM = (
     "You are a data analyst. Answer the user's question using ONLY the Genie data result "
@@ -55,9 +64,23 @@ class GenieMCP:
         }
         if self.sid:
             headers["mcp-session-id"] = self.sid
-        req = urllib.request.Request(self.mcp_url, data=json.dumps(payload).encode(), headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=120) as r:
-            return r.headers.get("mcp-session-id"), r.read().decode()
+        data = json.dumps(payload).encode()
+        last: Exception | None = None
+        for attempt in range(_HTTP_MAX_RETRIES + 1):
+            req = urllib.request.Request(self.mcp_url, data=data, headers=headers, method="POST")
+            try:
+                with urllib.request.urlopen(req, timeout=120) as r:
+                    return r.headers.get("mcp-session-id"), r.read().decode()
+            except urllib.error.HTTPError as e:
+                if e.code not in _RETRY_STATUS or attempt == _HTTP_MAX_RETRIES:
+                    raise
+                last = e
+            except urllib.error.URLError as e:  # transient network error
+                if attempt == _HTTP_MAX_RETRIES:
+                    raise
+                last = e
+            time.sleep(min(_HTTP_BACKOFF_CAP, _HTTP_BACKOFF_BASE * (2 ** attempt)) + random.uniform(0, 0.5))
+        raise last  # pragma: no cover — loop always returns or raises above
 
     @staticmethod
     def _parse(body: str) -> dict:
@@ -115,7 +138,8 @@ def ask_genie(question: str, token: str, mcp_url: str, poll_timeout_s: int | Non
 def _synthesize(question: str, genie_markdown: str, model: str) -> str:
     from openai import OpenAI
 
-    client = OpenAI(api_key=get_oauth_token(), base_url=f"{get_workspace_host()}/serving-endpoints")
+    client = OpenAI(api_key=get_oauth_token(), base_url=f"{get_workspace_host()}/serving-endpoints",
+                    max_retries=_HTTP_MAX_RETRIES)  # SDK backs off on 429/5xx from the serving endpoint
     resp = client.chat.completions.create(
         model=model,
         messages=[
@@ -203,40 +227,25 @@ def run_genie_for_project(db: Session, project_id: str, questions: list[dict],
     return {"items_created": created, "errors": errors[:5], "detail": detail}
 
 
-def generate_for_items(db: Session, project_id: str, items: list, user_token: str | None = None,
-                       experiment_id: str | None = None) -> dict:
-    """Generate answers for EXISTING Items (from CSV) that have no response yet — runs each
-    question's text through Genie, attaches a Response (+ trace/expectation), in place."""
-    host = get_workspace_host().rstrip("/")
-    mcp_url = f"{host}/api/2.0/mcp/genie"
-    token = user_token or get_oauth_token()
-    model = os.environ.get("SERVING_ENDPOINT", "databricks-claude-sonnet-5")
+def answer_for_question(question: str, token: str, mcp_url: str, model: str) -> dict:
+    """Network-only: run ONE question through Genie + synthesis. No DB, no MLflow — safe to
+    run concurrently across a thread pool. Returns {answer, generated_sql}."""
+    bundle = ask_genie(question, token, mcp_url)
+    answer = _synthesize(question, bundle["answer_markdown"], model)
+    return {"answer": answer, "generated_sql": bundle.get("generated_sql", "")}
 
-    created = 0
-    errors: list[str] = []
-    for item in items:
-        question = (item.question or "").strip()
-        if not question:
-            continue
-        try:
-            bundle = ask_genie(question, token, mcp_url)
-            answer = _synthesize(question, bundle["answer_markdown"], model)
-        except Exception as e:  # noqa: BLE001
-            errors.append(f"{question[:40]}: {e}")
-            logger.warning("Genie generate failed for %r: %s", question[:60], e)
-            continue
-        sql = bundle.get("generated_sql", "")
-        trace_id = _log_trace(experiment_id, question, answer, sql, item.expected_answer)
-        if item.mlflow_trace_id is None:
-            item.mlflow_trace_id = trace_id
-        meta = dict(item.item_metadata or {})
-        meta["generated_sql"] = sql
-        item.item_metadata = meta
-        db.add(Response(item_id=item.id, response_text=answer,
-                        model_name=f"genie+{model}", mlflow_trace_id=trace_id))
-        created += 1
+
+def attach_response(db: Session, item, answer: str, sql: str, model: str,
+                    experiment_id: str | None = None) -> None:
+    """Persist a generated answer onto an EXISTING Item (Response + MLflow trace/expectation),
+    in place. Call from a single thread — SQLAlchemy sessions and MLflow tracing are not
+    concurrency-safe, so generation fans out the network calls but persists serially."""
+    trace_id = _log_trace(experiment_id, item.question, answer, sql, item.expected_answer)
+    if item.mlflow_trace_id is None:
+        item.mlflow_trace_id = trace_id
+    meta = dict(item.item_metadata or {})
+    meta["generated_sql"] = sql
+    item.item_metadata = meta
+    db.add(Response(item_id=item.id, response_text=answer,
+                    model_name=f"genie+{model}", mlflow_trace_id=trace_id))
     db.commit()
-    detail = f"Generated {created} answer(s) via Genie."
-    if errors:
-        detail += f" {len(errors)} failed."
-    return {"generated": created, "errors": errors[:5], "detail": detail}

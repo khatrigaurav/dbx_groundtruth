@@ -14,7 +14,9 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import logging
+import os
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from sqlalchemy.orm import Session
 
@@ -27,6 +29,21 @@ logger = logging.getLogger(__name__)
 # app restart/deploy). The worker heartbeats updated_at after each question, so a healthy run
 # refreshes every ~1–2 min.
 _STALE_SECONDS = 360
+
+# How many questions to run through Genie at once. Genie polling is I/O-bound, so concurrency
+# cuts wall-clock ~linearly until the Genie space's SQL warehouse or the serving endpoint
+# becomes the bottleneck. Tune via GENERATION_CONCURRENCY in databricks.yml; the cap guards
+# against a runaway value.
+_DEFAULT_CONCURRENCY = 10
+_MAX_CONCURRENCY = 25
+
+
+def _concurrency() -> int:
+    try:
+        n = int(os.environ.get("GENERATION_CONCURRENCY", str(_DEFAULT_CONCURRENCY)))
+    except ValueError:
+        n = _DEFAULT_CONCURRENCY
+    return max(1, min(_MAX_CONCURRENCY, n))
 
 
 def _get_run(db: Session, project_id: str) -> GenerationRun | None:
@@ -113,27 +130,52 @@ def generate(db: Session, project_id: str, mode: GenerationMode,
 
 def _worker(project_id: str, item_ids: list[str], exp_id: str | None, mode: str,
             user_token: str | None) -> None:
+    from server.config import get_oauth_token, get_workspace_host
     from server.database import SessionLocal, get_engine
-    from server.services.genie_service import generate_for_items
+    from server.services import genie_service as G
 
     get_engine()
     assert SessionLocal is not None
     db = SessionLocal()
     try:
-        pending = [it.id for it in db.query(Item).filter(Item.id.in_(item_ids)).all() if not it.responses]
+        # Snapshot the questions to run as plain tuples BEFORE fanning out — ORM objects and the
+        # db session must never cross threads.
+        pending = [(it.id, (it.question or "").strip())
+                   for it in db.query(Item).filter(Item.id.in_(item_ids)).all()
+                   if not it.responses and (it.question or "").strip()]
+
+        host = get_workspace_host().rstrip("/")
+        mcp_url = f"{host}/api/2.0/mcp/genie"
+        token = user_token or get_oauth_token()
+        model = os.environ.get("SERVING_ENDPOINT", "databricks-claude-sonnet-5")
+
         generated = 0
         errs: list[str] = []
-        # One question at a time, so we can heartbeat progress after each (drives the UI and
-        # keeps updated_at fresh so a healthy long run isn't mistaken for orphaned).
-        for iid in pending:
-            item = db.query(Item).filter(Item.id == iid).first()
-            if item is None or item.responses:
-                continue
-            res = generate_for_items(db, project_id, [item], user_token=user_token, experiment_id=exp_id)
-            generated += res.get("generated", 0)
-            errs += res.get("errors", [])
-            _write_run(db, project_id, status="running", generated=generated,
-                       errors=json.dumps(errs) if errs else None)
+
+        def _fetch(row: tuple[str, str]):
+            iid, question = row
+            try:
+                return iid, G.answer_for_question(question, token, mcp_url, model), None
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Genie generate failed for %r: %s", question[:60], e)
+                return iid, None, f"{question[:40]}: {e}"
+
+        # Fan the Genie round-trips out across a bounded pool (I/O-bound polling); persist each
+        # result on THIS thread as it lands, so DB writes, MLflow traces, and the progress
+        # heartbeat stay single-threaded (keeps updated_at fresh so a healthy run isn't reaped).
+        with ThreadPoolExecutor(max_workers=_concurrency()) as pool:
+            for fut in as_completed([pool.submit(_fetch, row) for row in pending]):
+                iid, res, err = fut.result()
+                if err:
+                    errs.append(err)
+                else:
+                    item = db.query(Item).filter(Item.id == iid).first()
+                    if item is not None and not item.responses:
+                        G.attach_response(db, item, res["answer"], res["generated_sql"],
+                                          model, experiment_id=exp_id)
+                        generated += 1
+                _write_run(db, project_id, status="running", generated=generated,
+                           errors=json.dumps(errs) if errs else None)
 
         detail = f"Generated {generated} answer(s) via Genie."
         if errs:

@@ -101,6 +101,11 @@ resources:
             value: ${var.serving_endpoint}
           - name: MLFLOW_EXPERIMENT_BASE
             value: /Shared/groundtruth
+          # How many questions "Generate answers" runs through Genie in parallel. Raise it if
+          # the Genie space's SQL warehouse + serving endpoint can take more; lower it if you
+          # see throttling. Bounded at 25 in code.
+          - name: GENERATION_CONCURRENCY
+            value: "10"
           # Workspace path of the synced source — used by the SP background-generation
           # job. ${workspace.file_path} is where the bundle syncs, so this is portable
           # (no hardcoded /Workspace/Users/<email>/... path).
