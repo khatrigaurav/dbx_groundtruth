@@ -101,6 +101,7 @@ for attribution), but membership is no longer an access gate.
   - `|`-separated columns (case-insensitive): `question`| `expected_answer` (optional).
   - Pipe-delimited (not comma) so questions/answers can contain commas without quoting.
   - Accepts `.csv`/`.txt`/`.psv`.
+  - Example file uploaded: sample_eval_v2.csv 
 
 ### Example
 
