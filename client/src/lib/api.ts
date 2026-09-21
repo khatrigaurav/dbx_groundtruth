@@ -75,6 +75,8 @@ export const api = {
   generateStatus: (id: string) =>
     req<{ status: string; total?: number; generated?: number; errors?: string[]; detail?: string }>(
       'GET', `/projects/${id}/generate/status`),
+  cancelGenerate: (id: string) =>
+    req<{ status: string; detail?: string }>('POST', `/projects/${id}/generate/cancel`),
   inviteMember: (projectId: string, email: string, name?: string) =>
     req<User>('POST', `/projects/${projectId}/members`, { email, name }),
   listMembers: (projectId: string) => req<User[]>('GET', `/projects/${projectId}/members`),

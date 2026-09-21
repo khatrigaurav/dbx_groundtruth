@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import {
   ArrowLeft, ArrowRight, Check, Upload, Sparkles, FileSpreadsheet, ExternalLink,
   Gavel, UserPlus, ClipboardCheck, BarChart3, Trash2, User as UserIcon, Server,
-  Loader2, Lock, AlertTriangle,
+  Loader2, Lock, AlertTriangle, Ban,
 } from 'lucide-react'
 import {
   api, getSession, type GenerationMode, type Item, type JudgeCatalogItem,
@@ -38,6 +38,7 @@ export default function ProjectDetail() {
   const [inviteEmail, setInviteEmail] = useState('')
   const [genMode, setGenMode] = useState<GenerationMode>('sp')
   const [generating, setGenerating] = useState(false)      // a generation run is in flight
+  const [cancelling, setCancelling] = useState(false)      // a cancel has been requested
   const [genError, setGenError] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const isFacilitator = getSession()?.role === 'facilitator'
@@ -87,7 +88,7 @@ export default function ProjectDetail() {
   }
 
   async function generate() {
-    setBusy(true); setGenerating(true); setGenError(null)
+    setBusy(true); setGenerating(true); setCancelling(false); setGenError(null)
     const t = toast.loading('Starting generation…')
     try {
       const r = await api.generate(id, genMode)
@@ -110,9 +111,14 @@ export default function ProjectDetail() {
     const tick = async () => {
       try {
         const s = await api.generateStatus(id)
-        if (s.status === 'running') { load(); setTimeout(tick, 4000); return }
-        setGenerating(false)
-        if (s.status === 'error' || (s.errors && s.errors.length)) {
+        if (s.status === 'running' || s.status === 'cancelling') {  // still in progress
+          setCancelling(s.status === 'cancelling')
+          load(); setTimeout(tick, 4000); return
+        }
+        setGenerating(false); setCancelling(false)
+        if (s.status === 'cancelled') {
+          toast.message(s.detail || 'Generation cancelled')
+        } else if (s.status === 'error' || (s.errors && s.errors.length)) {
           const raw = (s.errors && s.errors.join(' • ')) || ''
           setGenError(s.detail ? (raw ? `${s.detail}\n\n${raw}` : s.detail) : (raw || 'Generation failed'))
           toast.error(s.detail || 'Generation failed')
@@ -123,6 +129,12 @@ export default function ProjectDetail() {
       } catch { setTimeout(tick, 5000) }  // transient poll error — keep trying
     }
     setTimeout(tick, 2500)
+  }
+
+  async function cancelGen() {
+    setCancelling(true)
+    try { const r = await api.cancelGenerate(id); toast.message(r.detail || 'Cancelling…') }
+    catch (e) { toast.error((e as Error).message); setCancelling(false) }
   }
 
   function toggleJudge(key: string) {
@@ -249,14 +261,23 @@ export default function ProjectDetail() {
                 <div className="text-xs text-muted-foreground">Runs on your behalf — uses your data access and shows in your Genie One history.</div>
               </button>
             </div>
-            <Button disabled={busy || generating || stats.pending === 0} onClick={generate}>
-              {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-              {generating ? 'Generating…' : `Generate ${stats.pending || ''} answer${stats.pending === 1 ? '' : 's'}`}
-            </Button>
+            <div className="flex gap-2">
+              <Button disabled={busy || generating || stats.pending === 0} onClick={generate}>
+                {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                {generating ? 'Generating…' : `Generate ${stats.pending || ''} answer${stats.pending === 1 ? '' : 's'}`}
+              </Button>
+              {generating && (
+                <Button variant="outline" onClick={cancelGen} disabled={cancelling}>
+                  <Ban className="h-4 w-4" /> {cancelling ? 'Cancelling…' : 'Cancel'}
+                </Button>
+              )}
+            </div>
             {generating && (
               <div className="flex items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                Generating answers via Genie — {stats.answered} of {stats.total} done. This can take ~a minute per question; you can leave this page.
+                {cancelling
+                  ? 'Cancelling — no new questions will start; answers already in flight will finish.'
+                  : <>Generating answers via Genie — {stats.answered} of {stats.total} done. This can take ~a minute per question; you can leave this page.</>}
               </div>
             )}
             {genError && !generating && (

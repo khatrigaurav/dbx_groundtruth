@@ -149,6 +149,16 @@ def generate_status(project_id: str, db: Session = Depends(get_db)):
     return background_status(db, project_id)
 
 
+@router.post("/{project_id}/generate/cancel")
+def generate_cancel(project_id: str, db: Session = Depends(get_db)):
+    """Request an in-progress generation to stop (survives across gunicorn workers via the DB)."""
+    if A.get_project_or_none(db, project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    from server.services.generation_service import request_cancel
+
+    return request_cancel(db, project_id)
+
+
 @router.post("/{project_id}/intake/genie")
 def intake_genie(
     project_id: str,

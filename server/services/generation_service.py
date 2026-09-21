@@ -60,13 +60,35 @@ def _write_run(db: Session, project_id: str, **fields) -> None:
     db.commit()
 
 
+def _cancel_requested(db: Session, project_id: str) -> bool:
+    """Fresh read of the run status so a cancel written by another gunicorn worker/session is
+    visible to the worker thread mid-run."""
+    db.expire_all()
+    run = _get_run(db, project_id)
+    return run is not None and run.status == "cancelling"
+
+
+def request_cancel(db: Session, project_id: str) -> dict:
+    """Signal an in-progress run to stop. The worker checks this between questions, starts no
+    new ones, and marks the run 'cancelled'. Questions already in flight finish in the
+    background but their answers are discarded."""
+    run = _get_run(db, project_id)
+    if run is None or run.status not in ("running", "cancelling"):
+        return {"status": (run.status if run else "idle"),
+                "detail": "No generation is currently running."}
+    run.status = "cancelling"
+    run.detail = "Cancelling — no new questions will start."
+    db.commit()
+    return {"status": "cancelling", "detail": run.detail}
+
+
 def background_status(db: Session, project_id: str) -> dict:
     run = _get_run(db, project_id)
     if run is None:
         return {"status": "idle"}
     status = run.status
-    # Reap an orphaned "running" row (worker died mid-run, e.g. an app restart).
-    if status == "running" and run.updated_at is not None:
+    # Reap an orphaned run (worker died mid-run/mid-cancel, e.g. an app restart).
+    if status in ("running", "cancelling") and run.updated_at is not None:
         age = (_dt.datetime.now(_dt.timezone.utc) - run.updated_at).total_seconds()
         if age > _STALE_SECONDS:
             run.status = status = "error"
@@ -113,7 +135,7 @@ def generate(db: Session, project_id: str, mode: GenerationMode,
         return {**common, "detail": "No questions awaiting an answer."}
 
     existing = _get_run(db, project_id)
-    if existing and existing.status == "running":
+    if existing and existing.status in ("running", "cancelling"):
         return {**common, "detail": "A generation run is already in progress."}
 
     ids = [it.id for it in items]
@@ -163,8 +185,18 @@ def _worker(project_id: str, item_ids: list[str], exp_id: str | None, mode: str,
         # Fan the Genie round-trips out across a bounded pool (I/O-bound polling); persist each
         # result on THIS thread as it lands, so DB writes, MLflow traces, and the progress
         # heartbeat stay single-threaded (keeps updated_at fresh so a healthy run isn't reaped).
-        with ThreadPoolExecutor(max_workers=_concurrency()) as pool:
-            for fut in as_completed([pool.submit(_fetch, row) for row in pending]):
+        pool = ThreadPoolExecutor(max_workers=_concurrency())
+        try:
+            futures = [pool.submit(_fetch, row) for row in pending]
+            for fut in as_completed(futures):
+                # Between questions, honor a cancel requested from any worker/session: start no
+                # more, drop in-flight results, mark cancelled.
+                if _cancel_requested(db, project_id):
+                    pool.shutdown(wait=False, cancel_futures=True)
+                    _write_run(db, project_id, status="cancelled", generated=generated,
+                               detail=f"Cancelled. Generated {generated} answer(s) before stopping.",
+                               errors=json.dumps(errs) if errs else None)
+                    return
                 iid, res, err = fut.result()
                 if err:
                     errs.append(err)
@@ -174,8 +206,11 @@ def _worker(project_id: str, item_ids: list[str], exp_id: str | None, mode: str,
                         G.attach_response(db, item, res["answer"], res["generated_sql"],
                                           model, experiment_id=exp_id)
                         generated += 1
-                _write_run(db, project_id, status="running", generated=generated,
+                # Heartbeat WITHOUT status, so it can't clobber a 'cancelling' set elsewhere.
+                _write_run(db, project_id, generated=generated,
                            errors=json.dumps(errs) if errs else None)
+        finally:
+            pool.shutdown(wait=False)
 
         detail = f"Generated {generated} answer(s) via Genie."
         if errs:
