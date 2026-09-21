@@ -51,6 +51,15 @@ resources:
       # Local path; the bundle syncs it to the workspace on deploy.
       source_code_path: .
 
+      # On-behalf-of-user authorization. `genie` lets "Run as me" generation call the Genie
+      # One MCP server with the signed-in user's token (so it uses their data grants and shows
+      # in their Genie One history). This also causes Databricks to forward X-Forwarded-Access-Token.
+      # (The user's identity headers — X-Forwarded-Email etc. — are forwarded regardless.)
+      # NOTE: the workspace `allowedAppsUserApiScopes` setting must permit `genie`, and the Genie
+      # space + its warehouse + referenced UC tables must be shared with each viewing user.
+      user_api_scopes:
+        - genie
+
       # Resource bindings. The `name:` of each MUST match the value_from keys in
       # the env block below (and injects PG* for the database automatically).
       resources:

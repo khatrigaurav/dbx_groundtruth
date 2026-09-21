@@ -58,8 +58,8 @@ async function req<T>(method: string, path: string, body?: unknown, isForm = fal
 }
 
 export const api = {
-  login: (email: string, password?: string, project_id?: string) =>
-    req<{ user: User; token: string }>('POST', '/auth/login', { email, password, project_id }),
+  // Identity comes from Databricks Apps SSO (forwarded headers) — no credentials sent.
+  whoami: () => req<{ user: User; token: string }>('GET', '/auth/whoami'),
   listProjects: () => req<Project[]>('GET', '/projects'),
   createProject: (name: string, scale: Scale, description?: string) =>
     req<Project>('POST', '/projects', { name, scale, description }),

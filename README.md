@@ -22,6 +22,8 @@ cd client && npm install && cd ..
 # Backend (SQLite). Set a profile so the LLM judge can reach a serving endpoint.
 export DATABASE_ENV=sqlite
 export DATABRICKS_PROFILE=<your-profile>
+# Off-platform there are no Databricks SSO headers, so stand in for the signed-in identity:
+export DEV_FACILITATOR_EMAIL=you@databricks.com
 uv run uvicorn server.app:app --reload --port 8000
 
 # Frontend dev server (proxies /api -> :8000)
@@ -31,8 +33,12 @@ cd client && npm run dev        # http://localhost:5173
 cd client && npm run build && cd .. && uv run uvicorn server.app:app --port 8000
 ```
 
-**Facilitator login:** `gaurav.khatri@databricks.com` / `GroundTruth!2026` (see `config/auth.yaml`).
-**Testers:** invited by email in a project, then log in with email + project (no password).
+**Auth:** identity comes from Databricks Apps SSO — no passwords, no committed credentials.
+Any signed-in Databricks user who can reach the app is a **facilitator**; restrict who that is
+via the app's Databricks permissions. There is no login form (the app recognizes you on load
+via `/auth/whoami`). Locally, `DEV_FACILITATOR_EMAIL` stands in for the SSO identity.
+**Reviewers** are still invited by email to a project (recorded against their real SSO email
+for attribution), but membership is no longer an access gate.
 
 ## Data sources (intake)
 - **CSV answer sheet** — columns (case-insensitive): `question` (required) · `expected_answer` · `response` · `model`

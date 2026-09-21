@@ -17,12 +17,6 @@ from server.database import (
 
 
 # --- auth --------------------------------------------------------------------
-class LoginRequest(BaseModel):
-    email: str
-    password: Optional[str] = None   # facilitators only
-    project_id: Optional[str] = None  # testers select a project
-
-
 class UserOut(BaseModel):
     id: str
     email: str

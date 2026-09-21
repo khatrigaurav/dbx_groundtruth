@@ -1,9 +1,8 @@
-import { BrowserRouter, Navigate, Route, Routes, Link, useNavigate } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes, Link } from 'react-router-dom'
 import { Toaster } from 'sonner'
-import { CheckCircle2, LogOut } from 'lucide-react'
-import { getSession, setSession } from './lib/api'
+import { CheckCircle2 } from 'lucide-react'
+import { getSession } from './lib/api'
 import { Badge } from './components/ui/badge'
-import { Button } from './components/ui/button'
 import Login from './pages/Login'
 import Projects from './pages/Projects'
 import ProjectDetail from './pages/ProjectDetail'
@@ -12,7 +11,6 @@ import Results from './pages/Results'
 
 function Shell({ children }: { children: React.ReactNode }) {
   const user = getSession()
-  const nav = useNavigate()
   return (
     <div className="min-h-full">
       <header className="sticky top-0 z-10 border-b bg-card/80 backdrop-blur">
@@ -27,9 +25,6 @@ function Shell({ children }: { children: React.ReactNode }) {
             <div className="flex items-center gap-3 text-sm">
               <span className="text-muted-foreground">{user.email}</span>
               <Badge variant={user.role === 'facilitator' ? 'default' : 'secondary'} className="capitalize">{user.role}</Badge>
-              <Button variant="ghost" size="sm" onClick={() => { setSession(null); nav('/login') }}>
-                <LogOut className="h-4 w-4" /> Sign out
-              </Button>
             </div>
           )}
         </div>

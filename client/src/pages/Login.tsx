@@ -1,34 +1,29 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { toast } from 'sonner'
-import { CheckCircle2 } from 'lucide-react'
-import { api, setSession, type Project } from '../lib/api'
+import { CheckCircle2, Loader2 } from 'lucide-react'
+import { api, setSession } from '../lib/api'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
-import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
-import { Input } from '../components/ui/input'
-import { Label } from '../components/ui/label'
 import { Button } from '../components/ui/button'
 
+// No login form: Databricks Apps SSO identifies the user. On load we resolve who they are
+// via /auth/whoami (forwarded identity headers) and continue. Access to the app itself is
+// governed by Databricks app permissions.
 export default function Login() {
-  const [mode, setMode] = useState<'facilitator' | 'tester'>('facilitator')
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [projectId, setProjectId] = useState('')
-  const [projects, setProjects] = useState<Project[]>([])
-  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const nav = useNavigate()
 
-  useEffect(() => { if (mode === 'tester') api.listProjects().then(setProjects).catch(() => {}) }, [mode])
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault(); setBusy(true)
+  async function signIn() {
+    setError(null)
     try {
-      const { user } = await api.login(email, mode === 'facilitator' ? password : undefined,
-        mode === 'tester' ? projectId : undefined)
+      const { user } = await api.whoami()
       setSession(user)
-      nav(mode === 'tester' ? `/projects/${projectId}/review` : '/projects')
-    } catch (err) { toast.error((err as Error).message) } finally { setBusy(false) }
+      nav('/projects')
+    } catch (err) {
+      setError((err as Error).message)
+    }
   }
+
+  useEffect(() => { signIn() /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [])
 
   return (
     <div className="flex min-h-screen items-center justify-center px-4">
@@ -40,35 +35,17 @@ export default function Login() {
           <CardTitle className="text-xl">GroundTruth</CardTitle>
           <CardDescription>Answer-key evaluation for AI responses</CardDescription>
         </CardHeader>
-        <CardContent>
-          <Tabs value={mode} onValueChange={(v) => setMode(v as 'facilitator' | 'tester')} className="mb-4">
-            <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="facilitator">Facilitator</TabsTrigger>
-              <TabsTrigger value="tester">Tester</TabsTrigger>
-            </TabsList>
-          </Tabs>
-          <form onSubmit={submit} className="space-y-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="email">Email</Label>
-              <Input id="email" type="email" placeholder="you@company.com" value={email} onChange={e => setEmail(e.target.value)} required />
+        <CardContent className="text-center">
+          {error ? (
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">{error}</p>
+              <Button className="w-full" onClick={signIn}>Try again</Button>
             </div>
-            {mode === 'facilitator' ? (
-              <div className="space-y-1.5">
-                <Label htmlFor="pw">Password</Label>
-                <Input id="pw" type="password" placeholder="••••••••" value={password} onChange={e => setPassword(e.target.value)} required />
-              </div>
-            ) : (
-              <div className="space-y-1.5">
-                <Label htmlFor="proj">Project</Label>
-                <select id="proj" className="flex h-10 w-full rounded-md border border-input bg-card px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  value={projectId} onChange={e => setProjectId(e.target.value)} required>
-                  <option value="">Select a project…</option>
-                  {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
-              </div>
-            )}
-            <Button type="submit" className="w-full" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</Button>
-          </form>
+          ) : (
+            <div className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> Signing you in…
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

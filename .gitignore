@@ -6,6 +6,8 @@ venv/
 .env
 *.db
 *.sqlite
+*.db-shm
+*.db-wal
 
 # Node
 node_modules/

@@ -9,4 +9,3 @@ mlflow>=3.10.0
 openai>=1.52.0
 pydantic>=2.0.0
 python-multipart>=0.0.9
-PyYAML>=6.0
