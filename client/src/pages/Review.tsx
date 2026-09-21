@@ -12,6 +12,7 @@ import { cn } from '../lib/utils'
 export default function Review() {
   const { id = '' } = useParams()
   const user = getSession()
+  const isFac = user?.role === 'facilitator'  // reviewers have no project page to go back to
   const [project, setProject] = useState<Project | null>(null)
   const [items, setItems] = useState<Item[]>([])
   const [idx, setIdx] = useState(0)
@@ -86,7 +87,7 @@ export default function Review() {
   if (items.length === 0) {
     return (
       <div className="mx-auto max-w-2xl">
-        <Link to={`/projects/${id}`} className="mb-4 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" /> Project</Link>
+        {isFac && <Link to={`/projects/${id}`} className="mb-4 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" /> Project</Link>}
         <Card><CardContent className="py-12 text-center text-sm text-muted-foreground">No questions to review yet.</CardContent></Card>
       </div>
     )
@@ -98,7 +99,7 @@ export default function Review() {
     <div className="grid gap-6 lg:grid-cols-[260px_1fr]">
       {/* Question navigator */}
       <aside className="lg:sticky lg:top-20 lg:self-start">
-        <Link to={`/projects/${id}`} className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" /> Project</Link>
+        {isFac && <Link to={`/projects/${id}`} className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" /> Project</Link>}
         <div className="mb-2 text-xs text-muted-foreground">{reviewedCount} of {items.length} reviewed</div>
         <div className="max-h-[70vh] space-y-1 overflow-auto pr-1">
           {items.map((it, i) => {

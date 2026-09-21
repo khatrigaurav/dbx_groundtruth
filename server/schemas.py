@@ -24,9 +24,16 @@ class UserOut(BaseModel):
     role: UserRole
 
 
+class ProjectRef(BaseModel):
+    id: str
+    name: str
+
+
 class LoginResponse(BaseModel):
     user: UserOut
     token: str  # v1: opaque = user id; frontend stores it
+    # For a scoped reviewer, the project(s) they've been invited to review (empty for facilitators).
+    projects: list[ProjectRef] = []
 
 
 # --- projects ----------------------------------------------------------------

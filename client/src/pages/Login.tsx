@@ -5,19 +5,27 @@ import { api, setSession } from '../lib/api'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Button } from '../components/ui/button'
 
-// No login form: Databricks Apps SSO identifies the user. On load we resolve who they are
-// via /auth/whoami (forwarded identity headers) and continue. Access to the app itself is
-// governed by Databricks app permissions.
+// No login form: Databricks Apps SSO identifies the user. On load we resolve who they are via
+// /auth/whoami. Facilitators land on the project list; scoped reviewers are sent straight to the
+// review screen for the project(s) they were invited to.
+type Choice = { id: string; name: string }
+
 export default function Login() {
   const [error, setError] = useState<string | null>(null)
+  const [choices, setChoices] = useState<Choice[] | null>(null)  // reviewer with >1 assignment
+  const [noAssignments, setNoAssignments] = useState(false)
   const nav = useNavigate()
 
   async function signIn() {
-    setError(null)
+    setError(null); setChoices(null); setNoAssignments(false)
     try {
-      const { user } = await api.whoami()
+      const { user, projects } = await api.whoami()
       setSession(user)
-      nav('/projects')
+      if (user.role === 'facilitator') { nav('/projects'); return }
+      // Scoped reviewer — restrict to their assigned project(s).
+      if (!projects || projects.length === 0) { setNoAssignments(true); return }
+      if (projects.length === 1) { nav(`/projects/${projects[0].id}/review`); return }
+      setChoices(projects)
     } catch (err) {
       setError((err as Error).message)
     }
@@ -40,6 +48,18 @@ export default function Login() {
             <div className="space-y-4">
               <p className="text-sm text-muted-foreground">{error}</p>
               <Button className="w-full" onClick={signIn}>Try again</Button>
+            </div>
+          ) : noAssignments ? (
+            <p className="text-sm text-muted-foreground">
+              You don't have any review assignments yet. Ask your facilitator to invite you to a project.
+            </p>
+          ) : choices ? (
+            <div className="space-y-2 text-left">
+              <p className="mb-1 text-center text-sm text-muted-foreground">Choose a project to review:</p>
+              {choices.map(c => (
+                <Button key={c.id} variant="outline" className="w-full justify-start"
+                  onClick={() => nav(`/projects/${c.id}/review`)}>{c.name}</Button>
+              ))}
             </div>
           ) : (
             <div className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">

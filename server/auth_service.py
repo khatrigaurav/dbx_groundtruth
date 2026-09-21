@@ -44,17 +44,39 @@ def resolve_identity(request) -> dict | None:
     return {"email": email.lower(), "name": name or email}
 
 
-def get_or_create_user(db: Session, email: str, name: str | None, role: UserRole) -> User:
+def get_or_create_user(db: Session, email: str, name: str | None, role: UserRole = UserRole.TESTER) -> User:
     user = db.query(User).filter(User.email == email.lower()).first()
     if user is None:
         user = User(email=email.lower(), name=name, role=role)
         db.add(user)
         db.commit()
         db.refresh(user)
-    elif role == UserRole.FACILITATOR and user.role != UserRole.FACILITATOR:
-        user.role = UserRole.FACILITATOR
-        db.commit()
     return user
+
+
+def resolve_role(db: Session, user_id: str) -> UserRole:
+    """Role is derived from project membership, not a stored flag:
+      - invited to a project only as a reviewer (TESTER) → scoped reviewer;
+      - a facilitator member of any project, OR never invited at all (a signed-in Databricks
+        user with app access) → facilitator (full access).
+    """
+    members = db.query(ProjectMember).filter(ProjectMember.user_id == user_id).all()
+    if not members:
+        return UserRole.FACILITATOR
+    if any(m.role == UserRole.FACILITATOR for m in members):
+        return UserRole.FACILITATOR
+    return UserRole.TESTER
+
+
+def member_projects(db: Session, user_id: str) -> list[Project]:
+    """Projects this user is a member of (used to scope a reviewer to their assignments)."""
+    return (
+        db.query(Project)
+        .join(ProjectMember, ProjectMember.project_id == Project.id)
+        .filter(ProjectMember.user_id == user_id)
+        .order_by(Project.created_at.desc())
+        .all()
+    )
 
 
 def is_project_member(db: Session, project_id: str, user_id: str) -> bool:
