@@ -1,0 +1,110 @@
+# GroundTruth — Databricks Asset Bundle
+#
+# One `databricks bundle deploy -t <target> -p <profile>` creates ALL workspace
+# resources (Lakebase instance, MLflow experiment), binds them to the app, syncs
+# the source, and deploys the app. No manual "create the Lakebase in the UI" step.
+#
+# Nothing here hardcodes a workspace: the host comes from the CLI profile you pass
+# with `-p`, and the per-workspace values (warehouse, serving endpoint) are variables
+# you set per target. This is what makes the Samsara handover (Phase 4) a config edit,
+# not a code edit.
+
+bundle:
+  name: groundtruth
+
+variables:
+  serving_endpoint:
+    description: Model-serving endpoint for the LLM judge + Genie answer synthesis.
+    default: databricks-claude-sonnet-5
+  warehouse_id:
+    description: >-
+      SQL warehouse ID for UC trace search (Phase 3 MLflow/Genie intake).
+      Any running warehouse. Set per target below or pass --var warehouse_id=<id>.
+
+resources:
+  # --- Lakebase Postgres instance (was the manual UI step) -------------------
+  database_instances:
+    groundtruth_db:
+      # Name is referenced by ENDPOINT_NAME below, so keep it stable.
+      name: groundtruth-db
+      capacity: CU_1        # smallest Lakebase SKU; bump if the demo needs more
+
+  # --- MLflow experiment for Phase 3 intake (bundle-created, no manual step) --
+  experiments:
+    groundtruth_experiment:
+      name: /Shared/groundtruth-intake
+
+  # --- The Databricks App -----------------------------------------------------
+  apps:
+    groundtruth:
+      name: groundtruth
+      description: Answer-key evaluation app (LLM correctness judge + human review).
+      # Local path; the bundle syncs it to the workspace on deploy.
+      source_code_path: .
+
+      # Resource bindings. The `name:` of each MUST match the value_from keys in
+      # the env block below (and injects PG* for the database automatically).
+      resources:
+        - name: database
+          database:
+            instance_name: ${resources.database_instances.groundtruth_db.name}
+            database_name: databricks_postgres   # default DB; schema `groundtruth` auto-creates at startup
+            permission: CAN_CONNECT_AND_CREATE
+        - name: sql-warehouse
+          sql_warehouse:
+            id: ${var.warehouse_id}
+            permission: CAN_USE
+        - name: serving-endpoint
+          serving_endpoint:
+            name: ${var.serving_endpoint}
+            permission: CAN_QUERY
+        - name: experiment
+          experiment:
+            experiment_id: ${resources.experiments.groundtruth_experiment.id}
+            permission: CAN_READ
+
+      # Authoritative app config. Overrides app.yaml (which is now just a local-dev
+      # stub). Env lives here so the dynamic/per-workspace values can be templated.
+      config:
+        command:
+          - gunicorn
+          - server.app:app
+          - -c
+          - gunicorn_conf.py
+        env:
+          - name: DATABASE_ENV
+            value: postgres
+          # Endpoint PATH derived from the instance name above — stays valid anywhere.
+          - name: ENDPOINT_NAME
+            value: projects/${resources.database_instances.groundtruth_db.name}/branches/production/endpoints/primary
+          - name: LAKEBASE_SCHEMA_NAME
+            value: groundtruth
+          - name: SERVING_ENDPOINT
+            value: ${var.serving_endpoint}
+          - name: MLFLOW_EXPERIMENT_BASE
+            value: /Shared/groundtruth
+          # Workspace path of the synced source — used by the SP background-generation
+          # job. ${workspace.file_path} is where the bundle syncs, so this is portable
+          # (no hardcoded /Workspace/Users/<email>/... path).
+          - name: APP_SOURCE_PATH
+            value: ${workspace.file_path}
+          - name: MLFLOW_EXPERIMENT_ID
+            value_from: experiment
+          - name: MLFLOW_TRACING_SQL_WAREHOUSE_ID
+            value_from: sql-warehouse
+
+# Targets carry per-workspace values. The host is NOT set here — it comes from the
+# `-p <profile>` you deploy with, so the same bundle works in any workspace.
+# We deliberately do NOT use `mode: development`: its `[dev ...]` name-prefixing would
+# rename the Lakebase instance and break the ENDPOINT_NAME path above.
+targets:
+  dev:
+    default: true
+    variables:
+      warehouse_id: REPLACE_WITH_WAREHOUSE_ID   # your dev workspace's warehouse
+
+  # Phase 4 handover: Samsara deploys with their own profile + their warehouse.
+  samsara:
+    variables:
+      serving_endpoint: databricks-claude-sonnet-5
+      warehouse_id: REPLACE_WITH_SAMSARA_WAREHOUSE_ID
