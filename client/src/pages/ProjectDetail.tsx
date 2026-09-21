@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import {
   ArrowLeft, ArrowRight, Check, Upload, Sparkles, FileSpreadsheet, ExternalLink,
   Gavel, UserPlus, ClipboardCheck, BarChart3, Trash2, User as UserIcon, Server,
-  Loader2, Lock, AlertTriangle, Ban,
+  Loader2, Lock, AlertTriangle, Ban, ChevronDown,
 } from 'lucide-react'
 import {
   api, getSession, type GenerationMode, type Item, type JudgeCatalogItem,
@@ -35,6 +35,8 @@ export default function ProjectDetail() {
   const [judges, setJudges] = useState<Record<string, ProjectJudge>>({})
   const [busy, setBusy] = useState(false)
   const [openStep, setOpenStep] = useState<string | null>(null)
+  // Independent expand state for the two sub-panels inside the merged Generate+Grade step.
+  const [subOpen, setSubOpen] = useState<{ gen: boolean; judge: boolean }>({ gen: true, judge: true })
   const [inviteEmail, setInviteEmail] = useState('')
   const [genMode, setGenMode] = useState<GenerationMode>('sp')
   const [generating, setGenerating] = useState(false)      // a generation run is in flight
@@ -72,8 +74,7 @@ export default function ProjectDetail() {
   }, [items, members])
 
   const activeStep = stats.total === 0 ? 'data'
-    : stats.answered < stats.total ? 'generate'
-    : stats.graded === 0 ? 'grade'
+    : (stats.answered < stats.total || stats.graded === 0) ? 'work'
     : stats.reviewed === 0 ? 'review' : 'results'
 
   const userToggled = useRef(false)
@@ -194,8 +195,9 @@ export default function ProjectDetail() {
   }
 
   const done = {
-    data: stats.total > 0, generate: stats.total > 0 && stats.answered === stats.total,
-    grade: stats.graded > 0, review: stats.reviewed > 0, results: false,
+    data: stats.total > 0,
+    work: stats.total > 0 && stats.answered === stats.total && stats.graded > 0,
+    review: stats.reviewed > 0, results: false,
   }
   const scaleLabel = project.scale === 'likert' ? 'Likert (1–5)' : 'Binary (pass/fail)'
 
@@ -245,113 +247,123 @@ export default function ProjectDetail() {
           </div>
         </Step>
 
-        <Step n={2} title="Generate answers" active={activeStep === 'generate'} done={done.generate}
-          desc="Run each question through Genie (the whole Databricks Genie ontology) to produce an answer to grade."
-          status={stats.total ? `${stats.answered} of ${stats.total} answered` : 'Add questions first'}
-          open={openStep === 'generate'} onToggle={() => toggleStep('generate')} actionLabel="Set up"
+        <Step n={2} title="Generate answers & grade" active={activeStep === 'work'} done={done.work}
+          desc="Kick off Genie and set up your AI judges together — pick judges while answers are still generating, then grade."
+          status={stats.total ? `${stats.answered}/${stats.total} answered · ${stats.graded} graded` : 'Add questions first'}
+          open={openStep === 'work'} onToggle={() => toggleStep('work')} actionLabel="Open"
           locked={stats.total === 0}>
           <div className="space-y-3">
-            <div className="grid gap-2 sm:grid-cols-2">
-              <button type="button" disabled={generating} onClick={() => setGenMode('sp')}
-                className={cn('rounded-lg border p-3 text-left transition-colors disabled:opacity-60',
-                  genMode === 'sp' ? 'border-primary bg-accent ring-1 ring-primary/20' : 'hover:bg-muted')}>
-                <div className="flex items-center gap-1.5 text-sm font-medium"><Server className="h-4 w-4" /> Background (recommended)</div>
-                <div className="text-xs text-muted-foreground">Runs as the app service principal. Reliable; ~1–2 min per question. Won't appear in your Genie One history.</div>
-              </button>
-              <button type="button" disabled={generating} onClick={() => setGenMode('user')}
-                className={cn('rounded-lg border p-3 text-left transition-colors disabled:opacity-60',
-                  genMode === 'user' ? 'border-primary bg-accent ring-1 ring-primary/20' : 'hover:bg-muted')}>
-                <div className="flex items-center gap-1.5 text-sm font-medium"><UserIcon className="h-4 w-4" /> Run as me</div>
-                <div className="text-xs text-muted-foreground">Runs on your behalf — uses your data access and shows in your Genie One history.</div>
-              </button>
-            </div>
-            <div className="flex gap-2">
-              <Button disabled={busy || generating || stats.pending === 0} onClick={generate}>
-                {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                {generating ? 'Generating…' : `Generate ${stats.pending || ''} answer${stats.pending === 1 ? '' : 's'}`}
-              </Button>
-              {generating && (
-                <Button variant="outline" onClick={cancelGen} disabled={cancelling}>
-                  <Ban className="h-4 w-4" /> {cancelling ? 'Cancelling…' : 'Cancel'}
-                </Button>
-              )}
-            </div>
-            {generating && (
-              <div className="flex items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                {cancelling
-                  ? 'Cancelling — no new questions will start; answers already in flight will finish.'
-                  : <>Generating answers via Genie — {stats.answered} of {stats.total} done. This can take ~a minute per question; you can leave this page.</>}
-              </div>
-            )}
-            {genError && !generating && (
-              <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                <div><div className="font-medium">Generation failed</div><div className="whitespace-pre-wrap break-words text-xs">{genError}</div></div>
-              </div>
-            )}
-            {stats.total === 0 && <p className="text-xs text-muted-foreground">Add questions in step 1 first.</p>}
-            {stats.total > 0 && stats.pending === 0 && !generating && (
-              <p className="text-xs text-muted-foreground">All {stats.total} questions already have answers — nothing to generate. (Upload a file without a <code>response</code> column if you want the app to generate them.)</p>
-            )}
-          </div>
-        </Step>
-
-        <Step n={3} title="Grade with AI judges" active={activeStep === 'grade'} done={done.grade}
-          desc="Pick one or more MLflow judges. Each grades every response and shows up as its own column in results."
-          status={stats.answered ? `${stats.graded} of ${stats.answered} graded · ${Object.values(judges).filter(j => j.enabled).length} judge(s)` : 'Generate answers first'}
-          open={openStep === 'grade'} onToggle={() => toggleStep('grade')} actionLabel="Set up & grade"
-          locked={stats.answered === 0}>
-          <div className="space-y-3">
-            {catalog.map(j => {
-              const on = judges[j.key]?.enabled
-              return (
-                <div key={j.key} className={cn('rounded-lg border p-3', on && 'border-primary/50 bg-accent/40')}>
-                  <label className="flex cursor-pointer items-start gap-2">
-                    <input type="checkbox" className="mt-1" checked={!!on} onChange={() => toggleJudge(j.key)} />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
-                        {j.label}
-                        {j.uses_answer_key
-                          ? <Badge variant="success" className="text-[10px]">uses answer key</Badge>
-                          : <Badge variant="muted" className="text-[10px]">quality only</Badge>}
-                        {j.needs_context && <Badge variant="muted" className="text-[10px]">needs context</Badge>}
-                      </div>
-                      <div className="text-xs text-muted-foreground">{j.description}</div>
-                    </div>
-                  </label>
-                  {on && (j.is_custom || j.key === 'guidelines') && (
-                    <Textarea rows={2} className="mt-2" placeholder="Grading instructions…"
-                      value={judges[j.key]?.instructions || ''}
-                      onChange={e => setJudgeField(j.key, 'instructions', e.target.value)} />
+            {/* Sub-step A — generate */}
+            <SubPanel title="Generate answers (Genie)"
+              done={stats.total > 0 && stats.answered === stats.total}
+              status={stats.total ? `${stats.answered} of ${stats.total} answered` : ''}
+              open={subOpen.gen} onToggle={() => setSubOpen(s => ({ ...s, gen: !s.gen }))}>
+              <div className="space-y-3">
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <button type="button" disabled={generating} onClick={() => setGenMode('sp')}
+                    className={cn('rounded-lg border p-3 text-left transition-colors disabled:opacity-60',
+                      genMode === 'sp' ? 'border-primary bg-accent ring-1 ring-primary/20' : 'hover:bg-muted')}>
+                    <div className="flex items-center gap-1.5 text-sm font-medium"><Server className="h-4 w-4" /> Background (recommended)</div>
+                    <div className="text-xs text-muted-foreground">Runs as the app service principal. Reliable; ~1–2 min per question. Won't appear in your Genie One history.</div>
+                  </button>
+                  <button type="button" disabled={generating} onClick={() => setGenMode('user')}
+                    className={cn('rounded-lg border p-3 text-left transition-colors disabled:opacity-60',
+                      genMode === 'user' ? 'border-primary bg-accent ring-1 ring-primary/20' : 'hover:bg-muted')}>
+                    <div className="flex items-center gap-1.5 text-sm font-medium"><UserIcon className="h-4 w-4" /> Run as me</div>
+                    <div className="text-xs text-muted-foreground">Runs on your behalf — uses your data access and shows in your Genie One history.</div>
+                  </button>
+                </div>
+                <div className="flex gap-2">
+                  <Button disabled={busy || generating || stats.pending === 0} onClick={generate}>
+                    {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                    {generating ? 'Generating…' : `Generate ${stats.pending || ''} answer${stats.pending === 1 ? '' : 's'}`}
+                  </Button>
+                  {generating && (
+                    <Button variant="outline" onClick={cancelGen} disabled={cancelling}>
+                      <Ban className="h-4 w-4" /> {cancelling ? 'Cancelling…' : 'Cancel'}
+                    </Button>
                   )}
                 </div>
-              )
-            })}
-            {catalog.some(j => judges[j.key]?.enabled && j.uses_answer_key) && stats.withKey < stats.answered && (
-              <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                <span>Correctness/custom judges compare against the answer key. {stats.answered - stats.withKey} of {stats.answered} answered questions have no <code>expected_answer</code>, so those will be skipped by those judges.</span>
+                {generating && (
+                  <div className="flex items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                    {cancelling
+                      ? 'Cancelling — no new questions will start; answers already in flight will finish.'
+                      : <>Generating via Genie — {stats.answered} of {stats.total} done. Takes ~a minute per question; set up judges below while it runs.</>}
+                  </div>
+                )}
+                {genError && !generating && (
+                  <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <div><div className="font-medium">Generation failed</div><div className="whitespace-pre-wrap break-words text-xs">{genError}</div></div>
+                  </div>
+                )}
+                {stats.total > 0 && stats.pending === 0 && !generating && (
+                  <p className="text-xs text-muted-foreground">All {stats.total} questions already have answers — nothing to generate. (Upload a file without a <code>response</code> column if you want the app to generate them.)</p>
+                )}
               </div>
-            )}
-            <div className="flex flex-wrap items-end gap-2">
-              <div>
-                <div className="mb-1 text-xs font-medium text-muted-foreground">Judge model (all judges)</div>
-                <select className="h-9 rounded-md border border-input bg-card px-2 text-sm"
-                  value={judges['correctness']?.model || models[0] || ''}
-                  onChange={e => Object.keys(judges).forEach(k => setJudgeField(k, 'model', e.target.value))}>
-                  {models.map(mm => <option key={mm} value={mm}>{mm}</option>)}
-                </select>
+            </SubPanel>
+
+            {/* Sub-step B — judges (available immediately, so you configure while Genie runs) */}
+            <SubPanel title="AI judges"
+              done={stats.graded > 0}
+              status={`${Object.values(judges).filter(j => j.enabled).length} selected${stats.answered ? ` · ${stats.graded}/${stats.answered} graded` : ''}`}
+              open={subOpen.judge} onToggle={() => setSubOpen(s => ({ ...s, judge: !s.judge }))}>
+              <div className="space-y-3">
+                {catalog.map(j => {
+                  const on = judges[j.key]?.enabled
+                  return (
+                    <div key={j.key} className={cn('rounded-lg border p-3', on && 'border-primary/50 bg-accent/40')}>
+                      <label className="flex cursor-pointer items-start gap-2">
+                        <input type="checkbox" className="mt-1" checked={!!on} onChange={() => toggleJudge(j.key)} />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
+                            {j.label}
+                            {j.uses_answer_key
+                              ? <Badge variant="success" className="text-[10px]">uses answer key</Badge>
+                              : <Badge variant="muted" className="text-[10px]">quality only</Badge>}
+                            {j.needs_context && <Badge variant="muted" className="text-[10px]">needs context</Badge>}
+                          </div>
+                          <div className="text-xs text-muted-foreground">{j.description}</div>
+                        </div>
+                      </label>
+                      {on && (j.is_custom || j.key === 'guidelines') && (
+                        <Textarea rows={2} className="mt-2" placeholder="Grading instructions…"
+                          value={judges[j.key]?.instructions || ''}
+                          onChange={e => setJudgeField(j.key, 'instructions', e.target.value)} />
+                      )}
+                    </div>
+                  )
+                })}
+                {catalog.some(j => judges[j.key]?.enabled && j.uses_answer_key) && stats.withKey < stats.answered && (
+                  <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <span>Correctness/custom judges compare against the answer key. {stats.answered - stats.withKey} of {stats.answered} answered questions have no <code>expected_answer</code>, so those will be skipped by those judges.</span>
+                  </div>
+                )}
+                <div className="flex flex-wrap items-end gap-2">
+                  <div>
+                    <div className="mb-1 text-xs font-medium text-muted-foreground">Judge model (all judges)</div>
+                    <select className="h-9 rounded-md border border-input bg-card px-2 text-sm"
+                      value={judges['correctness']?.model || models[0] || ''}
+                      onChange={e => Object.keys(judges).forEach(k => setJudgeField(k, 'model', e.target.value))}>
+                      {models.map(mm => <option key={mm} value={mm}>{mm}</option>)}
+                    </select>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={saveJudges}>Save judges</Button>
+                  <Button size="sm" disabled={busy || stats.answered === 0} onClick={runJudge}>
+                    <Gavel className="h-4 w-4" /> Grade with AI
+                  </Button>
+                </div>
+                {stats.answered === 0 && (
+                  <p className="text-xs text-muted-foreground">Pick your judges now — grading unlocks as soon as answers are generated above.</p>
+                )}
               </div>
-              <Button variant="outline" size="sm" onClick={saveJudges}>Save judges</Button>
-              <Button size="sm" disabled={busy || stats.answered === 0} onClick={runJudge}>
-                <Gavel className="h-4 w-4" /> Grade with AI
-              </Button>
-            </div>
+            </SubPanel>
           </div>
         </Step>
 
-        <Step n={4} title="Human review" active={activeStep === 'review'} done={done.review}
+        <Step n={3} title="Human review" active={activeStep === 'review'} done={done.review}
           desc="Invite people to independently score responses, so you can trust the AI judges."
           status={`${stats.testers} reviewer${stats.testers === 1 ? '' : 's'} · ${stats.reviewed} of ${stats.total} reviewed`}
           open={openStep === 'review'} onToggle={() => toggleStep('review')} actionLabel="Manage reviewers"
@@ -371,7 +383,7 @@ export default function ProjectDetail() {
           <Button variant="outline" onClick={() => nav(`/projects/${id}/review`)}><ClipboardCheck className="h-4 w-4" /> Review responses yourself</Button>
         </Step>
 
-        <Step n={5} title="Compare results" active={activeStep === 'results'} done={done.results}
+        <Step n={4} title="Compare results" active={activeStep === 'results'} done={done.results}
           desc="See where the AI judges and your reviewers agree — with Krippendorff's α across the whole panel."
           status={stats.graded || stats.reviewed ? 'Ready to view' : 'Grade or review first'}
           open={false} onToggle={() => nav(`/projects/${id}/results`)}
@@ -425,5 +437,32 @@ function Step(props: {
         </CardContent>
       </Card>
     </li>
+  )
+}
+
+// A collapsible sub-panel used inside the merged Generate+Grade step, so the two sub-steps
+// can be expanded independently (configure judges while generation runs).
+function SubPanel(props: {
+  title: string; status?: string; done?: boolean; open: boolean; onToggle: () => void
+  children: React.ReactNode
+}) {
+  const { title, status, done, open, onToggle, children } = props
+  return (
+    <div className="rounded-lg border bg-card">
+      <button type="button" onClick={onToggle} className="flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left">
+        <span className="flex items-center gap-2 text-sm font-medium">
+          <span className={cn('grid h-5 w-5 shrink-0 place-items-center rounded-full',
+            done ? 'bg-success text-success-foreground' : 'border border-muted-foreground/30')}>
+            {done && <Check className="h-3 w-3" />}
+          </span>
+          {title}
+        </span>
+        <span className="flex items-center gap-2">
+          {status && <span className="text-xs text-muted-foreground">{status}</span>}
+          <ChevronDown className={cn('h-4 w-4 text-muted-foreground transition-transform', open && 'rotate-180')} />
+        </span>
+      </button>
+      {open && <div className="border-t px-3 py-3">{children}</div>}
+    </div>
   )
 }
