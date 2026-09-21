@@ -52,7 +52,8 @@ Samsara a config edit, not a code edit**.
 ### 0. Prerequisites
 - Databricks CLI **v0.265.0+** (`database_instances` support). Check: `databricks --version`.
 - Authenticated to the target workspace: `databricks auth login --host <workspace-url> --profile <PROFILE>`
-- Node 18+ and `uv` (or Python 3.11) locally, to build the frontend.
+- Node 18+ on the deploy machine — the bundle builds the frontend automatically during
+  `deploy` (see step 2). No manual npm steps.
 - Permission to create a Lakebase instance, an MLflow experiment, and a Databricks App,
   and to read a SQL warehouse + model-serving endpoint in that workspace.
 
@@ -73,34 +74,29 @@ their own `warehouse_id` and deploys with their own profile.
 > Lakebase note: if a **fresh UC catalog** errors with `DAC_DOES_NOT_EXIST`, use an existing
 > catalog that already has metastore root storage — this bit the sibling VibeScaler deploy.
 
-### 2. Build the frontend
-`client/dist` is committed and intentionally **not** gitignored — FastAPI serves the built
-SPA from it. Rebuild so it's current before syncing:
-
-```bash
-cd client && npm install && npm run build && cd ..
-```
-
-### 3. Deploy the bundle
+### 2. Deploy the bundle (builds the frontend for you)
 
 ```bash
 PROFILE=<your-profile>          # supplies the workspace host — nothing hardcoded
 TARGET=dev                      # or `samsara` for the handover
 
 databricks bundle validate -t "$TARGET" -p "$PROFILE"   # sanity check
-databricks bundle deploy   -t "$TARGET" -p "$PROFILE"    # creates resources + deploys the app
+databricks bundle deploy   -t "$TARGET" -p "$PROFILE"    # builds + creates resources + deploys
 ```
 
 That single `deploy` will:
-1. Create the Lakebase instance `groundtruth-db` and the MLflow experiment `/Shared/groundtruth-intake`.
-2. Sync the source to `${workspace.file_path}` (respects `.gitignore`: skips `.venv`, `node_modules`).
-3. Create/update the app `groundtruth`, attaching `database`, `sql-warehouse`,
+1. **Build the React SPA** — the `artifacts.frontend` step runs `npm ci && npm run build` in
+   `client/` before syncing, so `client/dist` is always current. No manual npm step, and no
+   stale-build drift.
+2. Create the Lakebase instance `groundtruth-db` and the MLflow experiment `/Shared/groundtruth-intake`.
+3. Sync the source to `${workspace.file_path}` (respects `.gitignore`: skips `.venv`, `node_modules`).
+4. Create/update the app `groundtruth`, attaching `database`, `sql-warehouse`,
    `serving-endpoint`, and `experiment` — so the app's `value_from` keys and injected
    `PGHOST/PGUSER/PGPORT/PGDATABASE` all resolve automatically.
 
 To override the warehouse without editing the file: `... deploy -t dev --var warehouse_id=<id>`.
 
-### 4. Verify
+### 3. Verify
 - App URL: `databricks apps get groundtruth -p "$PROFILE"` (form `https://groundtruth-<workspace-id>.aws.databricksapps.com`).
 - **Schema auto-creates on startup** — `gunicorn_conf.py:on_starting` runs
   `bootstrap_database()` (`Base.metadata.create_all`) once before workers fork. The empty

@@ -12,6 +12,15 @@
 bundle:
   name: groundtruth
 
+# Build the React SPA before the source is synced, so the deployed app always serves the
+# current frontend. `databricks bundle deploy` runs this automatically — there is no
+# separate "build the frontend" step and no committed build artifact that can go stale.
+# Requires Node 18+ on the machine running the deploy (one-time prerequisite).
+artifacts:
+  frontend:
+    build: cd client && npm ci && npm run build
+    executable: sh
+
 variables:
   serving_endpoint:
     description: Model-serving endpoint for the LLM judge + Genie answer synthesis.
