@@ -1,0 +1,6 @@
+question|expected_answer
+are older vehicles (model_year before 2019) involved in more safety events per trip than newer ones?|Severity is evenly distributed across both groups
+which driver drove the most total miles, and how does their safety_score compare to the fleet average?|Finley Garcia (driver 1018, based in Phoenix AZ) logged 13,912 miles over the last ~90 days
+how many distinct drivers had at least one 'distracted' event in the last 60 days?|40 distinct drivers
+which is the most fuel efficient vehicle type| Box Truck
+what is the average idle time per trip, and which driver has the highest average idle minutes?|Reese Martinez (Driver ID 1008) has the highest average idle time at 25.94 minutes per trip 
