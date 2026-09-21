@@ -41,6 +41,11 @@ class ProjectCreate(BaseModel):
     name: str
     description: Optional[str] = None
     scale: ProjectScale  # required — admin picks Binary or Likert at creation (no default)
+    blind_review: bool = False
+
+
+class BlindReviewUpdate(BaseModel):
+    enabled: bool
 
 
 class ProjectJudgeOut(BaseModel):
@@ -63,6 +68,7 @@ class ProjectOut(BaseModel):
     judges: list[ProjectJudgeOut] = []
     judge_instructions: Optional[str] = None
     judge_model: Optional[str] = None
+    blind_review: bool = False
 
 
 class JudgeConfig(BaseModel):

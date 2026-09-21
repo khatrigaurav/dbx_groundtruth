@@ -14,6 +14,7 @@ export interface Project {
   genie_last_run_mode?: GenerationMode
   judges: ProjectJudge[]
   judge_instructions?: string; judge_model?: string
+  blind_review: boolean
 }
 export type Verdict = 'pass' | 'fail'
 export interface Judgment { id: string; kind: 'llm' | 'human'; rater_id?: string; judge_key?: string; verdict?: Verdict; score?: number; rationale?: string }
@@ -69,6 +70,8 @@ export const api = {
     req<{ deleted: string; experiment_deleted: boolean; detail?: string }>('DELETE', `/projects/${id}`),
   setJudgeConfig: (id: string, judges: ProjectJudge[]) =>
     req<Project>('PUT', `/projects/${id}/judge-config`, { judges }),
+  setBlindReview: (id: string, enabled: boolean) =>
+    req<Project>('PUT', `/projects/${id}/blind-review`, { enabled }),
   judgeCatalog: () => req<{ judges: JudgeCatalogItem[]; models: string[] }>('GET', '/judge-catalog'),
   getMetrics: (id: string) => req<Metrics>('GET', `/projects/${id}/metrics`),
   generate: (id: string, mode: GenerationMode, item_ids?: string[]) =>

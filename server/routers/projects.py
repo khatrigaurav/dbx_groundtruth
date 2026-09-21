@@ -16,6 +16,7 @@ from server.database import (
     get_db,
 )
 from server.schemas import (
+    BlindReviewUpdate,
     JudgeConfig,
     MemberInvite,
     ProjectCreate,
@@ -45,6 +46,7 @@ def _project_out(db: Session, p: Project) -> ProjectOut:
         genie_last_run_mode=p.genie_last_run_mode,
         judges=judges,
         judge_instructions=p.judge_instructions, judge_model=p.judge_model,
+        blind_review=p.blind_review,
     )
 
 
@@ -60,7 +62,7 @@ def create_project(
     db: Session = Depends(get_db),
 ):
     project = Project(name=body.name, description=body.description,
-                      scale=body.scale, created_by=x_user_id)
+                      scale=body.scale, created_by=x_user_id, blind_review=body.blind_review)
     db.add(project)
     db.commit()
     db.refresh(project)
@@ -94,6 +96,17 @@ def set_judge_config(project_id: str, body: JudgeConfig, db: Session = Depends(g
             instructions=(j.instructions or "").strip() or None,
             model=(j.model or "").strip() or None,
         ))
+    db.commit()
+    return _project_out(db, p)
+
+
+@router.put("/{project_id}/blind-review", response_model=ProjectOut)
+def set_blind_review(project_id: str, body: BlindReviewUpdate, db: Session = Depends(get_db)):
+    """Facilitator toggle: when enabled, human reviewers don't see the expected answer."""
+    p = A.get_project_or_none(db, project_id)
+    if p is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    p.blind_review = body.enabled
     db.commit()
     return _project_out(db, p)
 

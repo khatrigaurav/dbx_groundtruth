@@ -173,6 +173,10 @@ export default function ProjectDetail() {
     try { await api.inviteMember(id, inviteEmail); toast.success(`Invited ${inviteEmail}`); setInviteEmail(''); load() }
     catch (e) { toast.error((e as Error).message) }
   }
+  async function toggleBlind(enabled: boolean) {
+    try { await api.setBlindReview(id, enabled); toast.success(enabled ? 'Blind review on' : 'Blind review off'); load() }
+    catch (e) { toast.error((e as Error).message) }
+  }
 
   if (!project) return <p className="text-sm text-muted-foreground">Loading…</p>
 
@@ -360,6 +364,10 @@ export default function ProjectDetail() {
             {members.filter(m => m.role === 'tester').map(m => <Badge key={m.id} variant="secondary">{m.email}</Badge>)}
             {stats.testers === 0 && <span className="text-sm text-muted-foreground">No reviewers invited yet.</span>}
           </div>
+          <label className="mb-3 flex items-start gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm">
+            <input type="checkbox" className="mt-0.5" checked={project.blind_review} onChange={e => toggleBlind(e.target.checked)} />
+            <span><span className="font-medium">Blind review</span> — hide the expected answer from reviewers while they judge (reduces bias). You still see it.</span>
+          </label>
           <Button variant="outline" onClick={() => nav(`/projects/${id}/review`)}><ClipboardCheck className="h-4 w-4" /> Review responses yourself</Button>
         </Step>
 

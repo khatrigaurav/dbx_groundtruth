@@ -111,6 +111,8 @@ class Project(Base):
     # Custom LLM-judge config (nullable → falls back to service defaults).
     judge_instructions = Column(Text, nullable=True)
     judge_model = Column(String(255), nullable=True)
+    # Blind review: when true, human reviewers don't see the expected answer while judging.
+    blind_review = Column(Boolean, nullable=False, default=False)
 
     items = relationship("Item", back_populates="project", cascade="all, delete-orphan")
     members = relationship("ProjectMember", back_populates="project", cascade="all, delete-orphan")
@@ -246,6 +248,7 @@ _ADDITIVE_COLUMNS = [
     ("projects", "scale", "VARCHAR(20) DEFAULT 'BINARY'"),
     ("projects", "mlflow_experiment_id", "VARCHAR(255)"),
     ("projects", "genie_last_run_mode", "VARCHAR(20)"),
+    ("projects", "blind_review", "BOOLEAN NOT NULL DEFAULT FALSE"),
     ("judgments", "judge_key", "VARCHAR(64)"),
 ]
 

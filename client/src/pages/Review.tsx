@@ -131,7 +131,8 @@ export default function Review() {
               <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Question</div>
               <div className="text-[15px]">{item.question}</div>
             </div>
-            {item.expected_answer && (
+            {/* Blind review: reviewers don't see the answer key while judging (facilitators still do). */}
+            {item.expected_answer && !(project?.blind_review && !isFac) && (
               <div>
                 <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Expected answer</div>
                 <div className="rounded-md border border-success/30 bg-success/10 px-3 py-2 text-sm font-medium text-success">{item.expected_answer}</div>
