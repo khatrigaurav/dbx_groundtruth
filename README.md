@@ -12,7 +12,7 @@ Deliberately simpler than VibeScaler: no discovery/rubric/IRR/alignment pipeline
 - Frontend: React + Vite + Tailwind (built to `client/dist`, served by FastAPI)
 - Judge: Databricks serving endpoint (`SERVING_ENDPOINT`, default `databricks-claude-sonnet-5`)
 
-## Local development
+## Local development (Optional)
 
 ```bash
 # One-time
