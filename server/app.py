@@ -66,10 +66,33 @@ def genie_debug(request: Request):
     except Exception:  # noqa: BLE001
         sp_token = None
 
+    def scopes_of(token: str | None) -> dict:
+        """Decode the OAuth JWT and surface only its `scope` claim (never the token itself),
+        so we can see whether `genie` was actually granted to the down-scoped OBO token."""
+        if not token:
+            return {"token_present": False}
+        try:
+            import base64
+            import json as _json
+
+            parts = token.split(".")
+            if len(parts) < 2:
+                return {"token_present": True, "is_jwt": False}  # opaque token, no claims
+            payload = parts[1] + "=" * (-len(parts[1]) % 4)  # pad base64url
+            claims = _json.loads(base64.urlsafe_b64decode(payload))
+            scope = claims.get("scope") or claims.get("scp") or ""
+            scope_list = scope.split() if isinstance(scope, str) else list(scope)
+            return {"token_present": True, "is_jwt": True,
+                    "scopes": scope_list, "genie_present": "genie" in scope_list}
+        except Exception as e:  # noqa: BLE001
+            return {"token_present": True, "is_jwt": False, "error": str(e)[:200]}
+
     out = {
         "mcp_url": mcp_url,
         "forwarded_header_present": bool(user_token),
         "forwarded_header_len": len(user_token) if user_token else 0,
+        "user_token_scopes": scopes_of(user_token),
+        "sp_token_scopes": scopes_of(sp_token),
         "as_user_obo": probe(user_token),
         "as_service_principal": probe(sp_token),
         "sp_token_available": bool(sp_token),
