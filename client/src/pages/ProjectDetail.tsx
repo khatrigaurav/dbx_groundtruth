@@ -42,6 +42,10 @@ export default function ProjectDetail() {
   const [generating, setGenerating] = useState(false)      // a generation run is in flight
   const [cancelling, setCancelling] = useState(false)      // a cancel has been requested
   const [genError, setGenError] = useState<string | null>(null)
+  const [autoGrade, setAutoGrade] = useState(true)      // run AI judges automatically when generation finishes (default on)
+  const autoGradeRef = useRef(autoGrade)                // read latest value inside the poll closure
+  useEffect(() => { autoGradeRef.current = autoGrade }, [autoGrade])
+  const runJudgeRef = useRef<() => void>(() => {})      // latest runJudge, callable from the poll closure
   const fileRef = useRef<HTMLInputElement>(null)
   const isFacilitator = getSession()?.role === 'facilitator'
 
@@ -125,6 +129,7 @@ export default function ProjectDetail() {
           toast.error(s.detail || 'Generation failed')
         } else if (s.status === 'done') {
           toast.success(s.detail || `Generated ${s.generated ?? ''} answer(s)`)
+          if (autoGradeRef.current) runJudgeRef.current()   // auto-grade the freshly generated answers
         }
         load()
       } catch { setTimeout(tick, 5000) }  // transient poll error — keep trying
@@ -164,6 +169,7 @@ export default function ProjectDetail() {
       const r = await api.runJudge(id); toast.success(r.detail || 'Graded', { id: t }); load()
     } catch (e) { toast.error((e as Error).message, { id: t }) } finally { setBusy(false) }
   }
+  runJudgeRef.current = runJudge   // refresh each render so the poll closure calls the current runJudge
   async function remove() {
     if (!window.confirm(`Delete project "${project?.name}"? This removes all its questions, responses, grades, and its MLflow experiment. This cannot be undone.`)) return
     try { const r = await api.deleteProject(id); toast.success(r.detail || 'Project deleted'); nav('/projects') }
@@ -355,8 +361,17 @@ export default function ProjectDetail() {
                     <Gavel className="h-4 w-4" /> Grade with AI
                   </Button>
                 </div>
-                {stats.answered === 0 && (
+                {(generating || stats.pending > 0) && (
+                  <label className="flex items-start gap-2 text-xs text-muted-foreground">
+                    <input type="checkbox" className="mt-0.5" checked={autoGrade} onChange={e => setAutoGrade(e.target.checked)} />
+                    <span>Grade automatically when generation finishes — set your judges now and grading runs on its own, no need to wait.</span>
+                  </label>
+                )}
+                {stats.answered === 0 && !generating && (
                   <p className="text-xs text-muted-foreground">Pick your judges now — grading unlocks as soon as answers are generated above.</p>
+                )}
+                {stats.answered > 0 && stats.pending > 0 && (
+                  <p className="text-xs text-muted-foreground">You can grade the {stats.answered} answered so far now, or wait for all {stats.total} and grade in one pass.</p>
                 )}
               </div>
             </SubPanel>
