@@ -23,6 +23,14 @@ function hasHuman(js: { kind: string; verdict?: Verdict; score?: number }[]) {
 function hasLlm(js: { kind: string; verdict?: Verdict; score?: number }[]) {
   return js.some(j => j.kind === 'llm' && (j.verdict || j.score != null))
 }
+// Stable fingerprint of the enabled judge config, so we can tell saved vs. unsaved edits.
+function judgeSig(judges: Record<string, ProjectJudge>): string {
+  const list = Object.values(judges)
+    .filter(j => j.enabled)
+    .map(j => ({ k: j.judge_key, i: j.instructions || '', m: j.model || '' }))
+    .sort((a, b) => a.k.localeCompare(b.k))
+  return JSON.stringify(list)
+}
 
 export default function ProjectDetail() {
   const { id = '' } = useParams()
@@ -33,6 +41,8 @@ export default function ProjectDetail() {
   const [catalog, setCatalog] = useState<JudgeCatalogItem[]>([])
   const [models, setModels] = useState<string[]>([])
   const [judges, setJudges] = useState<Record<string, ProjectJudge>>({})
+  const [savedSig, setSavedSig] = useState('')          // fingerprint of the last-saved judge config
+  const [savingJudges, setSavingJudges] = useState(false)
   const [busy, setBusy] = useState(false)
   const [openStep, setOpenStep] = useState<string | null>(null)
   // Independent expand state for the two sub-panels inside the merged Generate+Grade step.
@@ -56,6 +66,7 @@ export default function ProjectDetail() {
       for (const j of p.judges) seed[j.judge_key] = j
       if (Object.keys(seed).length === 0) seed['correctness'] = { judge_key: 'correctness', enabled: true }
       setJudges(seed)
+      setSavedSig(judgeSig(seed))   // server state is, by definition, saved
     }).catch(e => toast.error(e.message))
     api.listItems(id).then(setItems).catch(() => {})
     api.listMembers(id).then(setMembers).catch(() => {})
@@ -80,6 +91,9 @@ export default function ProjectDetail() {
   const activeStep = stats.total === 0 ? 'data'
     : (stats.answered < stats.total || stats.graded === 0) ? 'work'
     : stats.reviewed === 0 ? 'review' : 'results'
+
+  // Unsaved judge edits: current config differs from what's persisted server-side.
+  const judgesDirty = useMemo(() => judgeSig(judges) !== savedSig, [judges, savedSig])
 
   const userToggled = useRef(false)
   useEffect(() => { if (!userToggled.current) setOpenStep(activeStep) }, [activeStep])
@@ -157,8 +171,14 @@ export default function ProjectDetail() {
   async function saveJudges() {
     const list = Object.values(judges).filter(j => j.enabled)
     if (list.length === 0) { toast.error('Enable at least one judge'); return }
-    try { await api.setJudgeConfig(id, list); toast.success('Judges saved'); load() }
-    catch (e) { toast.error((e as Error).message) }
+    setSavingJudges(true)
+    try {
+      await api.setJudgeConfig(id, list)
+      setSavedSig(judgeSig(judges))   // mark current config as saved
+      toast.success(`Saved ${list.length} judge(s)`)
+      load()
+    } catch (e) { toast.error((e as Error).message) }
+    finally { setSavingJudges(false) }
   }
   async function runJudge() {
     const list = Object.values(judges).filter(j => j.enabled)
@@ -166,6 +186,7 @@ export default function ProjectDetail() {
     setBusy(true); const t = toast.loading(`Running ${list.length} judge(s)…`)
     try {
       await api.setJudgeConfig(id, list)
+      setSavedSig(judgeSig(judges))   // grading also persists the config
       const r = await api.runJudge(id); toast.success(r.detail || 'Graded', { id: t }); load()
     } catch (e) { toast.error((e as Error).message, { id: t }) } finally { setBusy(false) }
   }
@@ -356,7 +377,18 @@ export default function ProjectDetail() {
                       {models.map(mm => <option key={mm} value={mm}>{mm}</option>)}
                     </select>
                   </div>
-                  <Button variant="outline" size="sm" onClick={saveJudges}>Save judges</Button>
+                  <Button variant={judgesDirty ? 'default' : 'outline'} size="sm" onClick={saveJudges}
+                    disabled={savingJudges || !judgesDirty}
+                    title={judgesDirty ? 'Save your judge selection and settings' : 'No unsaved changes'}>
+                    {savingJudges
+                      ? <><Loader2 className="h-4 w-4 animate-spin" /> Saving…</>
+                      : judgesDirty
+                        ? <><Sparkles className="h-4 w-4" /> Save judges</>
+                        : <><Check className="h-4 w-4" /> Saved</>}
+                  </Button>
+                  {judgesDirty && !savingJudges && (
+                    <span className="text-xs font-medium text-amber-600">Unsaved changes</span>
+                  )}
                   <Button size="sm" disabled={busy || stats.answered === 0} onClick={runJudge}>
                     <Gavel className="h-4 w-4" /> Grade with AI
                   </Button>

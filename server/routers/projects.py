@@ -118,6 +118,16 @@ def project_metrics(project_id: str, db: Session = Depends(get_db)):
     return METRICS.project_metrics(db, project_id)
 
 
+@router.post("/{project_id}/results-summary")
+def results_summary(project_id: str, db: Session = Depends(get_db)):
+    """LLM-written plain-English read of the Results (judge trustworthiness, biases, next step)."""
+    if A.get_project_or_none(db, project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    from server.services import summary_service as SUMMARY
+
+    return SUMMARY.summarize_results(db, project_id)
+
+
 @router.delete("/{project_id}")
 def delete_project(project_id: str, db: Session = Depends(get_db)):
     p = A.get_project_or_none(db, project_id)

@@ -23,10 +23,30 @@ export interface Item { id: string; question: string; expected_answer?: string; 
 
 export interface JudgeCatalogItem { key: string; label: string; description: string; uses_answer_key: boolean; needs_context: boolean; is_custom: boolean }
 export interface PerRater { rater: string; label: string; kind: 'llm' | 'human'; n: number; mean?: number; pass_rate?: number }
-export interface Metrics {
-  scale: Scale; level: string; n_raters: number; n_units_multi_rated: number
-  alpha_all: number | null; alpha_humans: number | null; per_rater: PerRater[]
+export type GateVerdict = 'pass' | 'review' | 'fail' | 'insufficient'
+export interface TrustGate { verdict: GateVerdict; reason: string }
+export interface JudgeScorecard {
+  judge_key: string; label: string; n: number; gate: TrustGate; bias: number | null
+  // binary
+  confusion?: { tp: number; fp: number; fn: number; tn: number }
+  accuracy?: number | null; precision?: number | null; recall?: number | null
+  specificity?: number | null; f1?: number | null; f1_ci?: [number | null, number | null]
+  balanced_accuracy?: number | null; mcc?: number | null; cohen_kappa?: number | null
+  // likert
+  spearman?: number | null; spearman_ci?: [number | null, number | null]; qwk?: number | null
+  mae?: number | null; rmse?: number | null; human_mean?: number | null; judge_mean?: number | null
 }
+export interface Metrics {
+  scale: Scale; level: string
+  n_items: number; n_responses: number; n_gold: number; n_reviewers: number; n_judges: number
+  n_units_multi_rated: number; small_sample: boolean
+  answer_key_coverage: { with_key: number; total: number }
+  alpha_all: number | null; alpha_all_ci: [number | null, number | null]
+  alpha_humans: number | null; alpha_humans_ci: [number | null, number | null]
+  human_pass_rate: number | null; human_mean: number | null
+  per_rater: PerRater[]; judges: JudgeScorecard[]; primary_judge: string | null
+}
+export interface ResultsSummary { summary?: string; model?: string; detail?: string; n_gold?: number; small_sample?: boolean }
 export interface GenerateResult {
   mode: GenerationMode; generated: number; run_id?: string; run_url?: string
   genie_url?: string; experiment_id?: string; experiment_url?: string
@@ -74,6 +94,7 @@ export const api = {
     req<Project>('PUT', `/projects/${id}/blind-review`, { enabled }),
   judgeCatalog: () => req<{ judges: JudgeCatalogItem[]; models: string[] }>('GET', '/judge-catalog'),
   getMetrics: (id: string) => req<Metrics>('GET', `/projects/${id}/metrics`),
+  resultsSummary: (id: string) => req<ResultsSummary>('POST', `/projects/${id}/results-summary`),
   generate: (id: string, mode: GenerationMode, item_ids?: string[]) =>
     req<GenerateResult>('POST', `/projects/${id}/generate`, { mode, item_ids }),
   generateStatus: (id: string) =>

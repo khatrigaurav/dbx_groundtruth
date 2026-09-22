@@ -128,7 +128,7 @@ targets:
   dev:
     default: true
     variables:
-      warehouse_id: 09a81fb25522fc9f   # your dev workspace's warehouse
+      warehouse_id: 02a94469833e5b5e   # your dev workspace's warehouse
 
   # Phase 4 handover: Samsara deploys with their own profile + their warehouse.
   samsara:
