@@ -153,10 +153,14 @@ class GenerationRun(Base):
     workers (in-memory state is per-process). One row per project (upserted each run)."""
     __tablename__ = "generation_runs"
     project_id = Column(String(32), primary_key=True)
-    status = Column(String(20), nullable=False, default="running")  # running | done | error
+    status = Column(String(20), nullable=False, default="running")  # running | done | error | cancelled
     mode = Column(String(20), nullable=True)  # user | sp
     total = Column(Integer, nullable=False, default=0)
     generated = Column(Integer, nullable=False, default=0)
+    # Pipeline phase (generate → grade run one after another in a single background worker).
+    phase = Column(String(20), nullable=True)  # generating | grading
+    graded = Column(Integer, nullable=False, default=0)
+    grade_total = Column(Integer, nullable=False, default=0)
     detail = Column(Text, nullable=True)
     errors = Column(Text, nullable=True)  # JSON-encoded list
     updated_at = Column(DateTime(timezone=True), default=_now, onupdate=_now)
@@ -250,6 +254,9 @@ _ADDITIVE_COLUMNS = [
     ("projects", "genie_last_run_mode", "VARCHAR(20)"),
     ("projects", "blind_review", "BOOLEAN NOT NULL DEFAULT FALSE"),
     ("judgments", "judge_key", "VARCHAR(64)"),
+    ("generation_runs", "phase", "VARCHAR(20)"),
+    ("generation_runs", "graded", "INTEGER NOT NULL DEFAULT 0"),
+    ("generation_runs", "grade_total", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 

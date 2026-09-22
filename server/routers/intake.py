@@ -136,7 +136,8 @@ def generate_answers(
 
     user_token = x_forwarded_access_token or request.headers.get("x-forwarded-access-token")
     try:
-        return generate(db, project_id, body.mode, item_ids=body.item_ids, user_token=user_token)
+        return generate(db, project_id, body.mode, item_ids=body.item_ids,
+                        user_token=user_token, then_grade=body.grade)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"Generation failed: {e}") from e
 

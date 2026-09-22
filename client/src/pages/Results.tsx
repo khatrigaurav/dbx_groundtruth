@@ -124,7 +124,10 @@ function JudgeCard({ card, scale, primary }: { card: JudgeScorecard; scale: stri
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <Bot className="h-4 w-4 text-muted-foreground" />
-            <span className="font-semibold">{card.label.replace('AI · ', '')}</span>
+            <span className="font-semibold capitalize">{card.label.replace('AI · ', '')}</span>
+            {card.judge_key === 'custom' && (
+              <span className="inline-flex items-center rounded-full bg-violet-500 px-2.5 py-1 text-xs font-semibold text-white">Custom</span>
+            )}
             {primary && <Badge variant="secondary" className="text-[10px]">primary</Badge>}
           </div>
           <GateBadge verdict={card.gate.verdict} />
@@ -220,13 +223,14 @@ function SummaryPanel({ id }: { id: string }) {
       else setErr(r.detail || 'No summary returned')
     } catch (e) { setErr((e as Error).message) } finally { setLoading(false) }
   }
+  const toggle = () => setCollapsed(c => !c)
   return (
     <Card className="border-primary/30 bg-accent/40">
       <CardContent className="py-4">
         <div className="flex items-center justify-between gap-2">
-          <button type="button" onClick={() => text && setCollapsed(c => !c)}
-            className={cn('flex items-center gap-2 font-semibold', text && 'cursor-pointer')}
-            aria-expanded={!collapsed}>
+          <button type="button" onClick={text ? toggle : undefined} disabled={!text}
+            className={cn('flex items-center gap-2 font-semibold', text && 'cursor-pointer hover:opacity-80')}
+            aria-expanded={text ? !collapsed : undefined}>
             <Sparkles className="h-4 w-4 text-primary" /> AI summary
             {text && (collapsed
               ? <ChevronDown className="h-4 w-4 text-muted-foreground" />
@@ -234,8 +238,8 @@ function SummaryPanel({ id }: { id: string }) {
           </button>
           <div className="flex items-center gap-2">
             {text && (
-              <Button size="sm" variant="ghost" onClick={() => setCollapsed(c => !c)}>
-                {collapsed ? 'Show' : 'Hide'}
+              <Button size="sm" variant="ghost" onClick={toggle}>
+                {collapsed ? <><ChevronDown className="h-4 w-4" /> Show</> : <><ChevronUp className="h-4 w-4" /> Hide</>}
               </Button>
             )}
             <Button size="sm" variant={text ? 'outline' : 'default'} onClick={generate} disabled={loading}>
@@ -247,7 +251,7 @@ function SummaryPanel({ id }: { id: string }) {
         {err && <p className="mt-2 text-sm text-destructive">{err}</p>}
         {text ? (
           collapsed
-            ? <p className="mt-2 text-xs text-muted-foreground">Summary hidden — click to expand.</p>
+            ? <button type="button" onClick={toggle} className="mt-2 text-xs text-primary hover:underline">Summary hidden — click to expand ▾</button>
             : <div className="mt-3"><Markdown>{text}</Markdown></div>
         ) : !err && (
           <p className="mt-2 text-sm text-muted-foreground">
@@ -346,11 +350,6 @@ export default function Results() {
             : 'No AI judge results yet. Run the judges from the project page to score them against the panel.'}
         </CardContent></Card>
       )}
-
-      <Card><CardContent className="flex flex-wrap items-center gap-x-6 gap-y-1 py-3 text-xs text-muted-foreground">
-        <span className="flex items-center gap-1"><Info className="h-3.5 w-3.5" /> Krippendorff's α: 1.0 perfect · ≥0.8 strong · ≥0.667 tentative agreement.</span>
-        <span>Ground truth = the human panel (answer-key-verified where a key exists). Hover any metric for what it means.</span>
-      </CardContent></Card>
 
       {/* Per-item detail */}
       <div>

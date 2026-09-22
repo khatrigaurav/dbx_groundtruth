@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from sqlalchemy.orm import Session
 
@@ -72,6 +73,20 @@ _CATALOG_BY_KEY = {j["key"]: j for j in JUDGE_CATALOG}
 
 def _default_model() -> str:
     return os.environ.get("SERVING_ENDPOINT", "databricks-claude-sonnet-5")
+
+
+# Judge calls are I/O-bound (serving-endpoint round-trips), so we fan them out across a bounded
+# pool — 20 in flight by default, tunable via GRADE_CONCURRENCY. Kept in step with generation.
+_GRADE_CONCURRENCY = 20
+_MAX_GRADE_CONCURRENCY = 25
+
+
+def _grade_concurrency() -> int:
+    try:
+        n = int(os.environ.get("GRADE_CONCURRENCY", str(_GRADE_CONCURRENCY)))
+    except ValueError:
+        n = _GRADE_CONCURRENCY
+    return max(1, min(_MAX_GRADE_CONCURRENCY, n))
 
 
 def _model_uri(name: str | None) -> str:
@@ -133,7 +148,18 @@ def _enabled_judges(db: Session, project: Project) -> list[ProjectJudge]:
 
 
 def run_judge_for_project(db: Session, project_id: str) -> dict:
-    """Run every enabled judge over every response. Upserts one Judgment per (response, judge)."""
+    """Inline entry point (kept for POST /run-judge). Delegates to the parallel grader."""
+    return grade_project(db, project_id)
+
+
+def grade_project(db: Session, project_id: str, *, progress_cb=None, cancel_check=None) -> dict:
+    """Run every enabled judge over every response. LLM calls fan out across a bounded thread
+    pool (I/O-bound); DB writes stay on THIS thread (SQLAlchemy sessions aren't thread-safe),
+    upserting one Judgment per (response, judge) as each result lands.
+
+    progress_cb(done, total) and cancel_check() -> bool are optional hooks the background
+    pipeline uses to report progress and honor a cancel; both run on this (caller's) thread.
+    """
     project = db.query(Project).filter(Project.id == project_id).first()
     if project is None:
         return {"judged": 0, "detail": "Project not found."}
@@ -142,13 +168,11 @@ def run_judge_for_project(db: Session, project_id: str) -> dict:
 
     items = db.query(Item).filter(Item.project_id == project_id).all()
     pairs = [(it, r) for it in items for r in it.responses if r.response_text]
-    if not pairs:
-        return {"judged": 0, "detail": "Nothing to grade yet (no responses)."}
 
-    judged = 0
     skipped = 0
-    errors: list[str] = []
     per_judge: dict[str, dict[str, int]] = {pj.judge_key: {"graded": 0, "no_answer_key": 0} for pj in judges}
+    # Build immutable tasks up front — ORM objects must never cross into the pool threads.
+    tasks: list[dict] = []
     for item, response in pairs:
         context = None
         if isinstance(item.item_metadata, dict):
@@ -159,39 +183,73 @@ def run_judge_for_project(db: Session, project_id: str) -> dict:
                 skipped += 1
                 per_judge[pj.judge_key]["no_answer_key"] += 1
                 continue  # correctness/custom need an answer key
-            model_uri = _model_uri(pj.model or project.judge_model)
-            instructions = pj.instructions or project.judge_instructions or DEFAULT_INSTRUCTIONS
+            tasks.append({
+                "response_id": response.id, "judge_key": pj.judge_key,
+                "model_uri": _model_uri(pj.model or project.judge_model),
+                "question": item.question, "response_text": response.response_text,
+                "expected": item.expected_answer, "context": context,
+                "instructions": pj.instructions or project.judge_instructions or DEFAULT_INSTRUCTIONS,
+            })
+
+    grade_total = len(tasks)
+    if progress_cb:
+        progress_cb(0, grade_total)
+    if not pairs:
+        return {"judged": 0, "detail": "Nothing to grade yet (no responses)."}
+
+    def _run(task: dict):
+        fb = _invoke_judge(task["judge_key"], task["model_uri"], question=task["question"],
+                           response_text=task["response_text"], expected=task["expected"],
+                           context=task["context"], instructions=task["instructions"])
+        return task, fb
+
+    judged = 0
+    done = 0
+    errors: list[str] = []
+    pool = ThreadPoolExecutor(max_workers=_grade_concurrency())
+    try:
+        futures = [pool.submit(_run, t) for t in tasks]
+        for fut in as_completed(futures):
+            if cancel_check and cancel_check():
+                pool.shutdown(wait=False, cancel_futures=True)
+                break
+            done += 1
             try:
-                fb = _invoke_judge(pj.judge_key, model_uri, question=item.question,
-                                   response_text=response.response_text,
-                                   expected=item.expected_answer, context=context,
-                                   instructions=instructions)
+                task, fb = fut.result()
             except Exception as e:  # noqa: BLE001
-                errors.append(f"{pj.judge_key}/{item.id[:6]}: {e}")
-                logger.warning("judge %s failed for response %s: %s", pj.judge_key, response.id, e)
+                errors.append(str(e)[:200])
+                logger.warning("judge call failed: %s", e)
+                if progress_cb:
+                    progress_cb(done, grade_total)
                 continue
             passed = _rating_to_pass(fb)
             if passed is None:
                 skipped += 1
+                if progress_cb:
+                    progress_cb(done, grade_total)
                 continue
             verdict = Verdict.PASS if passed else Verdict.FAIL
             score = (5.0 if passed else 1.0) if is_likert else None
             rationale = str(getattr(fb, "rationale", "") or "")[:1000]
-
             existing = (
                 db.query(Judgment)
-                .filter(Judgment.response_id == response.id, Judgment.kind == JudgmentKind.LLM,
-                        Judgment.judge_key == pj.judge_key)
+                .filter(Judgment.response_id == task["response_id"], Judgment.kind == JudgmentKind.LLM,
+                        Judgment.judge_key == task["judge_key"])
                 .first()
             )
             if existing:
                 existing.verdict, existing.score, existing.rationale = verdict, score, rationale
             else:
-                db.add(Judgment(response_id=response.id, kind=JudgmentKind.LLM,
-                                judge_key=pj.judge_key, verdict=verdict, score=score,
-                                rationale=rationale))
-            per_judge[pj.judge_key]["graded"] += 1
+                db.add(Judgment(response_id=task["response_id"], kind=JudgmentKind.LLM,
+                                judge_key=task["judge_key"], verdict=verdict, score=score, rationale=rationale))
+            per_judge[task["judge_key"]]["graded"] += 1
             judged += 1
+            if done % 10 == 0:
+                db.commit()  # periodic flush so progress is durable on long runs
+            if progress_cb:
+                progress_cb(done, grade_total)
+    finally:
+        pool.shutdown(wait=False)
     db.commit()
 
     detail = f"Ran {len(judges)} judge(s) → {judged} judgement(s)."

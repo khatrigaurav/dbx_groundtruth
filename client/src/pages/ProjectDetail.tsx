@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import {
   ArrowLeft, ArrowRight, Check, Upload, Sparkles, FileSpreadsheet, ExternalLink,
   Gavel, UserPlus, ClipboardCheck, BarChart3, Trash2, User as UserIcon, Server,
-  Loader2, Lock, AlertTriangle, Ban, ChevronDown,
+  Loader2, Lock, AlertTriangle, Ban, Pencil,
 } from 'lucide-react'
 import {
   api, getSession, type GenerationMode, type Item, type JudgeCatalogItem,
@@ -45,17 +45,14 @@ export default function ProjectDetail() {
   const [savingJudges, setSavingJudges] = useState(false)
   const [busy, setBusy] = useState(false)
   const [openStep, setOpenStep] = useState<string | null>(null)
-  // Independent expand state for the two sub-panels inside the merged Generate+Grade step.
-  const [subOpen, setSubOpen] = useState<{ gen: boolean; judge: boolean }>({ gen: true, judge: true })
   const [inviteEmail, setInviteEmail] = useState('')
   const [genMode, setGenMode] = useState<GenerationMode>('sp')
-  const [generating, setGenerating] = useState(false)      // a generation run is in flight
+  const [generating, setGenerating] = useState(false)      // a generate+grade run is in flight
   const [cancelling, setCancelling] = useState(false)      // a cancel has been requested
   const [genError, setGenError] = useState<string | null>(null)
-  const [autoGrade, setAutoGrade] = useState(true)      // run AI judges automatically when generation finishes (default on)
-  const autoGradeRef = useRef(autoGrade)                // read latest value inside the poll closure
-  useEffect(() => { autoGradeRef.current = autoGrade }, [autoGrade])
-  const runJudgeRef = useRef<() => void>(() => {})      // latest runJudge, callable from the poll closure
+  const [judgesLocked, setJudgesLocked] = useState(true)   // judge panel is read-only until "Edit judges"
+  // Live pipeline progress (which phase, how far), surfaced in the run step.
+  const [prog, setProg] = useState<{ phase?: string; generated?: number; total?: number; graded?: number; grade_total?: number }>({})
   const fileRef = useRef<HTMLInputElement>(null)
   const isFacilitator = getSession()?.role === 'facilitator'
 
@@ -67,6 +64,7 @@ export default function ProjectDetail() {
       if (Object.keys(seed).length === 0) seed['correctness'] = { judge_key: 'correctness', enabled: true }
       setJudges(seed)
       setSavedSig(judgeSig(seed))   // server state is, by definition, saved
+      setJudgesLocked(p.judges.length > 0)   // existing config → locked; brand-new → open to configure
     }).catch(e => toast.error(e.message))
     api.listItems(id).then(setItems).catch(() => {})
     api.listMembers(id).then(setMembers).catch(() => {})
@@ -89,7 +87,8 @@ export default function ProjectDetail() {
   }, [items, members])
 
   const activeStep = stats.total === 0 ? 'data'
-    : (stats.answered < stats.total || stats.graded === 0) ? 'work'
+    : (!judgesLocked && stats.graded === 0) ? 'judges'
+    : (stats.answered < stats.total || stats.graded === 0) ? 'run'
     : stats.reviewed === 0 ? 'review' : 'results'
 
   // Unsaved judge edits: current config differs from what's persisted server-side.
@@ -106,21 +105,19 @@ export default function ProjectDetail() {
     catch (e) { toast.error((e as Error).message) } finally { setBusy(false); if (fileRef.current) fileRef.current.value = '' }
   }
 
-  async function generate() {
-    setBusy(true); setGenerating(true); setCancelling(false); setGenError(null)
-    const t = toast.loading('Starting generation…')
+  // Section 3: generate answers (if any pending) and then grade — one background run.
+  async function runPipeline() {
+    setBusy(true); setGenerating(true); setCancelling(false); setGenError(null); setProg({})
+    const t = toast.loading(stats.pending > 0 ? 'Starting generation…' : 'Starting grading…')
     try {
-      const r = await api.generate(id, genMode)
+      const r = await api.generate(id, genMode, true)   // grade=true → generate, then grade
       const errs = r.errors || []
       if (errs.length) {                          // immediate failure (e.g. no user token)
         toast.error(errs[0] || r.detail || 'Failed', { id: t })
         setGenError(errs.join(' • ')); setGenerating(false); return
       }
-      if (/no questions awaiting/i.test(r.detail || '')) {  // nothing to do
-        toast.message(r.detail || 'Nothing to generate', { id: t }); setGenerating(false); return
-      }
-      toast.success(r.detail || 'Generating…', { id: t })
-      pollBackground()                            // both modes run in the background now
+      toast.success(r.detail || 'Running…', { id: t })
+      pollBackground()
     } catch (e) {
       toast.error((e as Error).message, { id: t }); setGenError((e as Error).message); setGenerating(false)
     } finally { setBusy(false) }
@@ -132,18 +129,19 @@ export default function ProjectDetail() {
         const s = await api.generateStatus(id)
         if (s.status === 'running' || s.status === 'cancelling') {  // still in progress
           setCancelling(s.status === 'cancelling')
+          setProg({ phase: s.phase, generated: s.generated, total: s.total, graded: s.graded, grade_total: s.grade_total })
           load(); setTimeout(tick, 4000); return
         }
-        setGenerating(false); setCancelling(false)
+        setGenerating(false); setCancelling(false); setProg({})
         if (s.status === 'cancelled') {
-          toast.message(s.detail || 'Generation cancelled')
-        } else if (s.status === 'error' || (s.errors && s.errors.length)) {
+          toast.message(s.detail || 'Run cancelled')
+        } else if (s.status === 'error') {
           const raw = (s.errors && s.errors.join(' • ')) || ''
-          setGenError(s.detail ? (raw ? `${s.detail}\n\n${raw}` : s.detail) : (raw || 'Generation failed'))
-          toast.error(s.detail || 'Generation failed')
-        } else if (s.status === 'done') {
-          toast.success(s.detail || `Generated ${s.generated ?? ''} answer(s)`)
-          if (autoGradeRef.current) runJudgeRef.current()   // auto-grade the freshly generated answers
+          setGenError(s.detail ? (raw ? `${s.detail}\n\n${raw}` : s.detail) : (raw || 'Run failed'))
+          toast.error(s.detail || 'Run failed')
+        } else {  // done — surface any non-fatal errors inline, but treat as success
+          if (s.errors && s.errors.length) setGenError(s.errors.join(' • '))
+          toast.success(s.detail || 'Generate + grade complete')
         }
         load()
       } catch { setTimeout(tick, 5000) }  // transient poll error — keep trying
@@ -175,22 +173,13 @@ export default function ProjectDetail() {
     try {
       await api.setJudgeConfig(id, list)
       setSavedSig(judgeSig(judges))   // mark current config as saved
+      setJudgesLocked(true)           // lock the panel — config is stored, ready to run
       toast.success(`Saved ${list.length} judge(s)`)
       load()
     } catch (e) { toast.error((e as Error).message) }
     finally { setSavingJudges(false) }
   }
-  async function runJudge() {
-    const list = Object.values(judges).filter(j => j.enabled)
-    if (list.length === 0) { toast.error('Enable at least one judge'); return }
-    setBusy(true); const t = toast.loading(`Running ${list.length} judge(s)…`)
-    try {
-      await api.setJudgeConfig(id, list)
-      setSavedSig(judgeSig(judges))   // grading also persists the config
-      const r = await api.runJudge(id); toast.success(r.detail || 'Graded', { id: t }); load()
-    } catch (e) { toast.error((e as Error).message, { id: t }) } finally { setBusy(false) }
-  }
-  runJudgeRef.current = runJudge   // refresh each render so the poll closure calls the current runJudge
+  function unlockJudges() { setJudgesLocked(false) }
   async function remove() {
     if (!window.confirm(`Delete project "${project?.name}"? This removes all its questions, responses, grades, and its MLflow experiment. This cannot be undone.`)) return
     try { const r = await api.deleteProject(id); toast.success(r.detail || 'Project deleted'); nav('/projects') }
@@ -223,7 +212,8 @@ export default function ProjectDetail() {
 
   const done = {
     data: stats.total > 0,
-    work: stats.total > 0 && stats.answered === stats.total && stats.graded > 0,
+    judges: stats.total > 0 && judgesLocked,
+    run: stats.total > 0 && stats.answered === stats.total && stats.graded > 0,
     review: stats.reviewed > 0, results: false,
   }
   const scaleLabel = project.scale === 'likert' ? 'Likert (1–5)' : 'Binary (pass/fail)'
@@ -274,143 +264,129 @@ export default function ProjectDetail() {
           </div>
         </Step>
 
-        <Step n={2} title="Generate answers & grade" active={activeStep === 'work'} done={done.work}
-          desc="Kick off Genie and set up your AI judges together — pick judges while answers are still generating, then grade."
-          status={stats.total ? `${stats.answered}/${stats.total} answered · ${stats.graded} graded` : 'Add questions first'}
-          open={openStep === 'work'} onToggle={() => toggleStep('work')} actionLabel="Open"
+        <Step n={2} title="Build AI judges" active={activeStep === 'judges'} done={done.judges}
+          desc="Choose and configure your AI judges once. Save to lock the config — it's stored and reused every run."
+          status={`${Object.values(judges).filter(j => j.enabled).length} judge(s)${judgesLocked ? ' · saved' : ' · editing'}`}
+          open={openStep === 'judges'} onToggle={() => toggleStep('judges')} actionLabel="Open"
           locked={stats.total === 0}>
           <div className="space-y-3">
-            {/* Sub-step A — generate */}
-            <SubPanel title="Generate answers (Genie)"
-              done={stats.total > 0 && stats.answered === stats.total}
-              status={stats.total ? `${stats.answered} of ${stats.total} answered` : ''}
-              open={subOpen.gen} onToggle={() => setSubOpen(s => ({ ...s, gen: !s.gen }))}>
-              <div className="space-y-3">
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <button type="button" disabled={generating} onClick={() => setGenMode('sp')}
-                    className={cn('rounded-lg border p-3 text-left transition-colors disabled:opacity-60',
-                      genMode === 'sp' ? 'border-primary bg-accent ring-1 ring-primary/20' : 'hover:bg-muted')}>
-                    <div className="flex items-center gap-1.5 text-sm font-medium"><Server className="h-4 w-4" /> Background (recommended)</div>
-                    <div className="text-xs text-muted-foreground">Runs as the app service principal. Reliable; ~1–2 min per question. Won't appear in your Genie One history.</div>
-                  </button>
-                  <button type="button" disabled={generating} onClick={() => setGenMode('user')}
-                    className={cn('rounded-lg border p-3 text-left transition-colors disabled:opacity-60',
-                      genMode === 'user' ? 'border-primary bg-accent ring-1 ring-primary/20' : 'hover:bg-muted')}>
-                    <div className="flex items-center gap-1.5 text-sm font-medium"><UserIcon className="h-4 w-4" /> Run as me</div>
-                    <div className="text-xs text-muted-foreground">Runs on your behalf — uses your data access and shows in your Genie One history.</div>
-                  </button>
-                </div>
-                <div className="flex gap-2">
-                  <Button disabled={busy || generating || stats.pending === 0} onClick={generate}>
-                    {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                    {generating ? 'Generating…' : `Generate ${stats.pending || ''} answer${stats.pending === 1 ? '' : 's'}`}
-                  </Button>
-                  {generating && (
-                    <Button variant="outline" onClick={cancelGen} disabled={cancelling}>
-                      <Ban className="h-4 w-4" /> {cancelling ? 'Cancelling…' : 'Cancel'}
-                    </Button>
+            {judgesLocked && (
+              <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                <Lock className="h-3.5 w-3.5 shrink-0" /> Config saved &amp; locked — step 3 grades with these judges. Use “Edit judges” to change them.
+              </div>
+            )}
+            {catalog.map(j => {
+              const on = judges[j.key]?.enabled
+              return (
+                <div key={j.key} className={cn('rounded-lg border p-3', on && 'border-primary/50 bg-accent/40', judgesLocked && 'opacity-70')}>
+                  <label className={cn('flex items-start gap-2', !judgesLocked && 'cursor-pointer')}>
+                    <input type="checkbox" className="mt-1" checked={!!on} disabled={judgesLocked} onChange={() => toggleJudge(j.key)} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
+                        {j.label}
+                        {j.uses_answer_key
+                          ? <Badge variant="success" className="text-[10px]">uses answer key</Badge>
+                          : <Badge variant="muted" className="text-[10px]">quality only</Badge>}
+                        {j.needs_context && <Badge variant="muted" className="text-[10px]">needs context</Badge>}
+                      </div>
+                      <div className="text-xs text-muted-foreground">{j.description}</div>
+                    </div>
+                  </label>
+                  {on && (j.is_custom || j.key === 'guidelines') && (
+                    <Textarea rows={2} className="mt-2" placeholder="Grading instructions…" disabled={judgesLocked}
+                      value={judges[j.key]?.instructions || ''}
+                      onChange={e => setJudgeField(j.key, 'instructions', e.target.value)} />
                   )}
                 </div>
-                {generating && (
-                  <div className="flex items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm text-muted-foreground">
-                    <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                    {cancelling
-                      ? 'Cancelling — no new questions will start; answers already in flight will finish.'
-                      : <>Generating via Genie — {stats.answered} of {stats.total} done. Takes ~a minute per question; set up judges below while it runs.</>}
-                  </div>
-                )}
-                {genError && !generating && (
-                  <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                    <div><div className="font-medium">Generation failed</div><div className="whitespace-pre-wrap break-words text-xs">{genError}</div></div>
-                  </div>
-                )}
-                {stats.total > 0 && stats.pending === 0 && !generating && (
-                  <p className="text-xs text-muted-foreground">All {stats.total} questions already have answers — nothing to generate. (Upload a file without a <code>response</code> column if you want the app to generate them.)</p>
-                )}
+              )
+            })}
+            {catalog.some(j => judges[j.key]?.enabled && j.uses_answer_key) && stats.withKey < stats.answered && (
+              <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span>Correctness/custom judges compare against the answer key. {stats.answered - stats.withKey} of {stats.answered} answered questions have no <code>expected_answer</code>, so those will be skipped by those judges.</span>
               </div>
-            </SubPanel>
-
-            {/* Sub-step B — judges (available immediately, so you configure while Genie runs) */}
-            <SubPanel title="AI judges"
-              done={stats.graded > 0}
-              status={`${Object.values(judges).filter(j => j.enabled).length} selected${stats.answered ? ` · ${stats.graded}/${stats.answered} graded` : ''}`}
-              open={subOpen.judge} onToggle={() => setSubOpen(s => ({ ...s, judge: !s.judge }))}>
-              <div className="space-y-3">
-                {catalog.map(j => {
-                  const on = judges[j.key]?.enabled
-                  return (
-                    <div key={j.key} className={cn('rounded-lg border p-3', on && 'border-primary/50 bg-accent/40')}>
-                      <label className="flex cursor-pointer items-start gap-2">
-                        <input type="checkbox" className="mt-1" checked={!!on} onChange={() => toggleJudge(j.key)} />
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
-                            {j.label}
-                            {j.uses_answer_key
-                              ? <Badge variant="success" className="text-[10px]">uses answer key</Badge>
-                              : <Badge variant="muted" className="text-[10px]">quality only</Badge>}
-                            {j.needs_context && <Badge variant="muted" className="text-[10px]">needs context</Badge>}
-                          </div>
-                          <div className="text-xs text-muted-foreground">{j.description}</div>
-                        </div>
-                      </label>
-                      {on && (j.is_custom || j.key === 'guidelines') && (
-                        <Textarea rows={2} className="mt-2" placeholder="Grading instructions…"
-                          value={judges[j.key]?.instructions || ''}
-                          onChange={e => setJudgeField(j.key, 'instructions', e.target.value)} />
-                      )}
-                    </div>
-                  )
-                })}
-                {catalog.some(j => judges[j.key]?.enabled && j.uses_answer_key) && stats.withKey < stats.answered && (
-                  <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                    <span>Correctness/custom judges compare against the answer key. {stats.answered - stats.withKey} of {stats.answered} answered questions have no <code>expected_answer</code>, so those will be skipped by those judges.</span>
-                  </div>
-                )}
-                <div className="flex flex-wrap items-end gap-2">
-                  <div>
-                    <div className="mb-1 text-xs font-medium text-muted-foreground">Judge model (all judges)</div>
-                    <select className="h-9 rounded-md border border-input bg-card px-2 text-sm"
-                      value={judges['correctness']?.model || models[0] || ''}
-                      onChange={e => Object.keys(judges).forEach(k => setJudgeField(k, 'model', e.target.value))}>
-                      {models.map(mm => <option key={mm} value={mm}>{mm}</option>)}
-                    </select>
-                  </div>
+            )}
+            <div className="flex flex-wrap items-end gap-2">
+              <div>
+                <div className="mb-1 text-xs font-medium text-muted-foreground">Judge model (all judges)</div>
+                <select className="h-9 rounded-md border border-input bg-card px-2 text-sm disabled:opacity-60" disabled={judgesLocked}
+                  value={judges['correctness']?.model || models[0] || ''}
+                  onChange={e => Object.keys(judges).forEach(k => setJudgeField(k, 'model', e.target.value))}>
+                  {models.map(mm => <option key={mm} value={mm}>{mm}</option>)}
+                </select>
+              </div>
+              {judgesLocked ? (
+                <Button variant="outline" size="sm" onClick={unlockJudges}><Pencil className="h-4 w-4" /> Edit judges</Button>
+              ) : (
+                <>
                   <Button variant={judgesDirty ? 'default' : 'outline'} size="sm" onClick={saveJudges}
-                    disabled={savingJudges || !judgesDirty}
-                    title={judgesDirty ? 'Save your judge selection and settings' : 'No unsaved changes'}>
+                    disabled={savingJudges || Object.values(judges).filter(j => j.enabled).length === 0}
+                    title="Save and lock your judge config">
                     {savingJudges
                       ? <><Loader2 className="h-4 w-4 animate-spin" /> Saving…</>
-                      : judgesDirty
-                        ? <><Sparkles className="h-4 w-4" /> Save judges</>
-                        : <><Check className="h-4 w-4" /> Saved</>}
+                      : <><Check className="h-4 w-4" /> Save &amp; lock</>}
                   </Button>
-                  {judgesDirty && !savingJudges && (
-                    <span className="text-xs font-medium text-amber-600">Unsaved changes</span>
-                  )}
-                  <Button size="sm" disabled={busy || stats.answered === 0} onClick={runJudge}>
-                    <Gavel className="h-4 w-4" /> Grade with AI
-                  </Button>
-                </div>
-                {(generating || stats.pending > 0) && (
-                  <label className="flex items-start gap-2 text-xs text-muted-foreground">
-                    <input type="checkbox" className="mt-0.5" checked={autoGrade} onChange={e => setAutoGrade(e.target.checked)} />
-                    <span>Grade automatically when generation finishes — set your judges now and grading runs on its own, no need to wait.</span>
-                  </label>
-                )}
-                {stats.answered === 0 && !generating && (
-                  <p className="text-xs text-muted-foreground">Pick your judges now — grading unlocks as soon as answers are generated above.</p>
-                )}
-                {stats.answered > 0 && stats.pending > 0 && (
-                  <p className="text-xs text-muted-foreground">You can grade the {stats.answered} answered so far now, or wait for all {stats.total} and grade in one pass.</p>
-                )}
-              </div>
-            </SubPanel>
+                  {judgesDirty && !savingJudges && <span className="text-xs font-medium text-amber-600">Unsaved changes</span>}
+                </>
+              )}
+            </div>
           </div>
         </Step>
 
-        <Step n={3} title="Human review" active={activeStep === 'review'} done={done.review}
+        <Step n={3} title="Generate answers & grade" active={activeStep === 'run'} done={done.run}
+          desc="Genie generates answers, then your saved judges grade them — one run, fanned out in batches of 20."
+          status={stats.total ? `${stats.answered}/${stats.total} answered · ${stats.graded} graded` : 'Add questions first'}
+          open={openStep === 'run'} onToggle={() => toggleStep('run')} actionLabel="Open"
+          locked={stats.total === 0}>
+          <div className="space-y-3">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <button type="button" disabled={generating} onClick={() => setGenMode('sp')}
+                className={cn('rounded-lg border p-3 text-left transition-colors disabled:opacity-60',
+                  genMode === 'sp' ? 'border-primary bg-accent ring-1 ring-primary/20' : 'hover:bg-muted')}>
+                <div className="flex items-center gap-1.5 text-sm font-medium"><Server className="h-4 w-4" /> Background (recommended)</div>
+                <div className="text-xs text-muted-foreground">Runs as the app service principal. Reliable; ~1–2 min per question. Won't appear in your Genie One history.</div>
+              </button>
+              <button type="button" disabled={generating} onClick={() => setGenMode('user')}
+                className={cn('rounded-lg border p-3 text-left transition-colors disabled:opacity-60',
+                  genMode === 'user' ? 'border-primary bg-accent ring-1 ring-primary/20' : 'hover:bg-muted')}>
+                <div className="flex items-center gap-1.5 text-sm font-medium"><UserIcon className="h-4 w-4" /> Run as me</div>
+                <div className="text-xs text-muted-foreground">Runs on your behalf — uses your data access and shows in your Genie One history.</div>
+              </button>
+            </div>
+            <div className="flex gap-2">
+              <Button disabled={busy || generating || stats.total === 0} onClick={runPipeline}>
+                {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : stats.pending > 0 ? <Sparkles className="h-4 w-4" /> : <Gavel className="h-4 w-4" />}
+                {generating ? 'Running…' : stats.pending > 0 ? `Generate ${stats.pending} & grade` : 'Grade with AI'}
+              </Button>
+              {generating && (
+                <Button variant="outline" onClick={cancelGen} disabled={cancelling}>
+                  <Ban className="h-4 w-4" /> {cancelling ? 'Cancelling…' : 'Cancel'}
+                </Button>
+              )}
+            </div>
+            {generating && (
+              <div className="flex items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                {cancelling
+                  ? 'Cancelling — in-flight work finishes; nothing new starts.'
+                  : prog.phase === 'grading'
+                    ? <>Grading with AI judges — {prog.graded ?? 0}{prog.grade_total ? ` of ${prog.grade_total}` : ''} done (batches of 20).</>
+                    : <>Generating via Genie — {stats.answered} of {stats.total} done (batches of 20). Grading runs automatically after.</>}
+              </div>
+            )}
+            {genError && !generating && (
+              <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <div><div className="font-medium">Run reported problems</div><div className="whitespace-pre-wrap break-words text-xs">{genError}</div></div>
+              </div>
+            )}
+            {!judgesLocked && (
+              <p className="text-xs text-amber-600">Your judge edits in step 2 aren't saved — save &amp; lock them so grading uses the latest config.</p>
+            )}
+          </div>
+        </Step>
+
+        <Step n={4} title="Human review" active={activeStep === 'review'} done={done.review}
           desc="Invite people to independently score responses, so you can trust the AI judges."
           status={`${stats.testers} reviewer${stats.testers === 1 ? '' : 's'} · ${stats.reviewed} of ${stats.total} reviewed`}
           open={openStep === 'review'} onToggle={() => toggleStep('review')} actionLabel="Manage reviewers"
@@ -430,7 +406,7 @@ export default function ProjectDetail() {
           <Button variant="outline" onClick={() => nav(`/projects/${id}/review`)}><ClipboardCheck className="h-4 w-4" /> Review responses yourself</Button>
         </Step>
 
-        <Step n={4} title="Compare results" active={activeStep === 'results'} done={done.results}
+        <Step n={5} title="Compare results" active={activeStep === 'results'} done={done.results}
           desc="See where the AI judges and your reviewers agree — with Krippendorff's α across the whole panel."
           status={stats.graded || stats.reviewed ? 'Ready to view' : 'Grade or review first'}
           open={false} onToggle={() => nav(`/projects/${id}/results`)}
@@ -484,32 +460,5 @@ function Step(props: {
         </CardContent>
       </Card>
     </li>
-  )
-}
-
-// A collapsible sub-panel used inside the merged Generate+Grade step, so the two sub-steps
-// can be expanded independently (configure judges while generation runs).
-function SubPanel(props: {
-  title: string; status?: string; done?: boolean; open: boolean; onToggle: () => void
-  children: React.ReactNode
-}) {
-  const { title, status, done, open, onToggle, children } = props
-  return (
-    <div className="rounded-lg border bg-card">
-      <button type="button" onClick={onToggle} className="flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left">
-        <span className="flex items-center gap-2 text-sm font-medium">
-          <span className={cn('grid h-5 w-5 shrink-0 place-items-center rounded-full',
-            done ? 'bg-success text-success-foreground' : 'border border-muted-foreground/30')}>
-            {done && <Check className="h-3 w-3" />}
-          </span>
-          {title}
-        </span>
-        <span className="flex items-center gap-2">
-          {status && <span className="text-xs text-muted-foreground">{status}</span>}
-          <ChevronDown className={cn('h-4 w-4 text-muted-foreground transition-transform', open && 'rotate-180')} />
-        </span>
-      </button>
-      {open && <div className="border-t px-3 py-3">{children}</div>}
-    </div>
   )
 }

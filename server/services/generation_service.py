@@ -37,7 +37,7 @@ _LIVENESS_BEAT_S = 30
 # cuts wall-clock ~linearly until the Genie space's SQL warehouse or the serving endpoint
 # becomes the bottleneck. Tune via GENERATION_CONCURRENCY in databricks.yml; the cap guards
 # against a runaway value.
-_DEFAULT_CONCURRENCY = 10
+_DEFAULT_CONCURRENCY = 20
 _MAX_CONCURRENCY = 25
 
 
@@ -92,6 +92,7 @@ def background_status(db: Session, project_id: str) -> dict:
     return {
         "status": status, "mode": run.mode, "total": run.total or 0,
         "generated": run.generated or 0, "detail": run.detail,
+        "phase": run.phase, "graded": run.graded or 0, "grade_total": run.grade_total or 0,
         "errors": json.loads(run.errors) if run.errors else [],
     }
 
@@ -104,7 +105,11 @@ def _pending_items(db: Session, project_id: str, item_ids: list[str] | None) -> 
 
 
 def generate(db: Session, project_id: str, mode: GenerationMode,
-             item_ids: list[str] | None = None, user_token: str | None = None) -> dict:
+             item_ids: list[str] | None = None, user_token: str | None = None,
+             then_grade: bool = False) -> dict:
+    """Start a background run. When then_grade is set, the same worker grades with the AI judges
+    immediately after generation finishes (the "Generate answers and grade" pipeline). With no
+    questions left to generate, it still starts — going straight to the grading phase."""
     project = db.query(Project).filter(Project.id == project_id).first()
     if project is None:
         return {"detail": "Project not found.", "generated": 0}
@@ -126,27 +131,34 @@ def generate(db: Session, project_id: str, mode: GenerationMode,
 
     common.update({"experiment_id": exp_id, "experiment_url": EXP.experiment_url(exp_id),
                    "genie_url": EXP.genie_url()})
-    if not items:
+    if not items and not then_grade:
         return {**common, "detail": "No questions awaiting an answer."}
 
     existing = _get_run(db, project_id)
     if existing and existing.status in ("running", "cancelling"):
-        return {**common, "detail": "A generation run is already in progress."}
+        return {**common, "detail": "A run is already in progress."}
 
     ids = [it.id for it in items]
     # Only "Run as me" uses the forwarded OBO token; Background runs as the SP (token=None).
     worker_token = user_token if mode == GenerationMode.USER else None
+    phase = "generating" if ids else "grading"
     _write_run(db, project_id, status="running", mode=mode.value, total=len(ids),
-               generated=0, detail=None, errors=None)
-    t = threading.Thread(target=_worker, args=(project_id, ids, exp_id, mode.value, worker_token), daemon=True)
+               generated=0, phase=phase, graded=0, grade_total=0, detail=None, errors=None)
+    t = threading.Thread(target=_worker,
+                         args=(project_id, ids, exp_id, mode.value, worker_token, then_grade), daemon=True)
     t.start()
     where = "in your Genie One history" if mode == GenerationMode.USER else "as the app service principal (not in your Genie One history)"
-    return {**common, "detail": f"Generating {len(ids)} answer(s) via Genie, {where}. "
-                                "Answers appear here as they're produced."}
+    if ids:
+        detail = f"Generating {len(ids)} answer(s) via Genie, {where}."
+        if then_grade:
+            detail += " Then grading with your AI judges automatically."
+    else:
+        detail = "Grading existing answers with your AI judges…"
+    return {**common, "detail": detail}
 
 
 def _worker(project_id: str, item_ids: list[str], exp_id: str | None, mode: str,
-            user_token: str | None) -> None:
+            user_token: str | None, then_grade: bool = False) -> None:
     from server.config import get_oauth_token, get_workspace_host
     from server.database import SessionLocal, get_engine
     from server.services import genie_service as G
@@ -243,7 +255,8 @@ def _worker(project_id: str, item_ids: list[str], exp_id: str | None, mode: str,
         finally:
             pool.shutdown(wait=False)
 
-        detail = f"Generated {generated} answer(s) via Genie."
+        detail = (f"Generated {generated} answer(s) via Genie." if item_ids
+                  else "")
         if errs:
             detail += f" {len(errs)} failed."
         if mode == "user" and generated > 0:
@@ -253,8 +266,35 @@ def _worker(project_id: str, item_ids: list[str], exp_id: str | None, mode: str,
             hint = ("your token was accepted but isn't authorized for Genie" if user_token else
                     "the service principal can't call Genie (check its Genie/UC access).")
             detail = f"All Genie calls returned 403, running as {who}: {hint}"
-        _write_run(db, project_id, status="done", generated=generated,
-                   detail=detail, errors=json.dumps(errs) if errs else None)
+
+        # Pipeline: grade with the AI judges right after generation, in the same worker.
+        if then_grade and not cancel_event.is_set():
+            from server.services.judge_service import grade_project
+
+            _write_run(db, project_id, phase="grading", generated=generated,
+                       detail=(detail + " Grading with AI judges…").strip(),
+                       errors=json.dumps(errs) if errs else None)
+
+            def _grade_progress(done: int, total: int) -> None:
+                _write_run(db, project_id, graded=done, grade_total=total)
+
+            try:
+                gr = grade_project(db, project_id, progress_cb=_grade_progress,
+                                   cancel_check=cancel_event.is_set)
+                detail = (detail + " " + (gr.get("detail") or "")).strip()
+                for e in (gr.get("errors") or []):
+                    errs.append(e)
+            except Exception as e:  # noqa: BLE001
+                logger.exception("grading phase failed for project %s", project_id)
+                errs.append(f"grading: {e}")
+                detail = (detail + " Grading failed — see errors.").strip()
+            final_status = "cancelled" if cancel_event.is_set() else "done"
+            _write_run(db, project_id, status=final_status, phase="grading", generated=generated,
+                       detail=detail, errors=json.dumps(errs) if errs else None)
+        else:
+            _write_run(db, project_id, status="done", phase="generating", generated=generated,
+                       detail=detail or f"Generated {generated} answer(s).",
+                       errors=json.dumps(errs) if errs else None)
     except Exception as e:  # noqa: BLE001
         logger.exception("generation worker failed for project %s", project_id)
         _write_run(db, project_id, status="error", detail=str(e), errors=json.dumps([str(e)]))

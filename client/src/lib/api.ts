@@ -95,10 +95,11 @@ export const api = {
   judgeCatalog: () => req<{ judges: JudgeCatalogItem[]; models: string[] }>('GET', '/judge-catalog'),
   getMetrics: (id: string) => req<Metrics>('GET', `/projects/${id}/metrics`),
   resultsSummary: (id: string) => req<ResultsSummary>('POST', `/projects/${id}/results-summary`),
-  generate: (id: string, mode: GenerationMode, item_ids?: string[]) =>
-    req<GenerateResult>('POST', `/projects/${id}/generate`, { mode, item_ids }),
+  generate: (id: string, mode: GenerationMode, grade = false, item_ids?: string[]) =>
+    req<GenerateResult>('POST', `/projects/${id}/generate`, { mode, grade, item_ids }),
   generateStatus: (id: string) =>
-    req<{ status: string; total?: number; generated?: number; errors?: string[]; detail?: string }>(
+    req<{ status: string; total?: number; generated?: number; errors?: string[]; detail?: string
+          phase?: string; graded?: number; grade_total?: number }>(
       'GET', `/projects/${id}/generate/status`),
   cancelGenerate: (id: string) =>
     req<{ status: string; detail?: string }>('POST', `/projects/${id}/generate/cancel`),

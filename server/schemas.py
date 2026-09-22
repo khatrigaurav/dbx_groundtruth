@@ -155,6 +155,8 @@ class GenerateRequest(BaseModel):
     mode: GenerationMode  # user (OBO, foreground) | sp (background job)
     # If item_ids omitted, generate for every question without a response yet.
     item_ids: Optional[list[str]] = None
+    # When true, the same background run grades with the AI judges right after generation.
+    grade: bool = False
 
 
 class GenerateResult(BaseModel):
