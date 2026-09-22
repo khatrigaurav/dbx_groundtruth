@@ -2,20 +2,23 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Header
 from sqlalchemy.orm import Session
 
-from server.database import Item, get_db
+from server import auth_service as A
+from server.database import Item, UserRole, get_db
 from server.schemas import ItemOut, JudgmentOut, ResponseOut
 
 router = APIRouter(prefix="/projects", tags=["items"])
 
 
-def item_to_out(item: Item) -> ItemOut:
+def item_to_out(item: Item, *, include_expected: bool = True) -> ItemOut:
     return ItemOut(
         id=item.id,
         question=item.question,
-        expected_answer=item.expected_answer,
+        # Blind review strips the answer key here so it never reaches the client —
+        # a UI-only hide still shipped it in the payload (visible via the network tab).
+        expected_answer=item.expected_answer if include_expected else None,
         source=item.source,
         responses=[
             ResponseOut(
@@ -31,11 +34,22 @@ def item_to_out(item: Item) -> ItemOut:
 
 
 @router.get("/{project_id}/items", response_model=list[ItemOut])
-def list_items(project_id: str, db: Session = Depends(get_db)):
+def list_items(
+    project_id: str,
+    x_user_id: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    project = A.get_project_or_none(db, project_id)
     items = (
         db.query(Item)
         .filter(Item.project_id == project_id)
         .order_by(Item.created_at.asc())
         .all()
     )
-    return [item_to_out(i) for i in items]
+    # When blind review is on, only a confirmed facilitator receives the expected answer.
+    # Fail closed: if we can't positively identify the caller as a facilitator, blind it.
+    include_expected = True
+    if project is not None and project.blind_review:
+        is_facilitator = bool(x_user_id) and A.resolve_role(db, x_user_id) == UserRole.FACILITATOR
+        include_expected = is_facilitator
+    return [item_to_out(i, include_expected=include_expected) for i in items]
