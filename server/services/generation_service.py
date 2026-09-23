@@ -284,6 +284,10 @@ def _worker(project_id: str, item_ids: list[str], exp_id: str | None, mode: str,
                 detail = (detail + " " + (gr.get("detail") or "")).strip()
                 for e in (gr.get("errors") or []):
                     errs.append(e)
+                # Mirror the AI verdicts into MLflow so they're reviewable alongside the answer
+                # key on each trace (best-effort — never affects the run's outcome).
+                from server.services.mlflow_assessments import log_project_ai_judgments
+                log_project_ai_judgments(db, project_id)
             except Exception as e:  # noqa: BLE001
                 logger.exception("grading phase failed for project %s", project_id)
                 errs.append(f"grading: {e}")

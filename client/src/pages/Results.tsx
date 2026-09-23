@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import {
   ArrowLeft, Info, Sparkles, RefreshCw, Users, Bot, Key,
   CheckCircle2, AlertTriangle, XCircle, HelpCircle, Scale as ScaleIcon,
-  ChevronDown, ChevronUp,
+  ChevronDown, ChevronUp, ExternalLink,
 } from 'lucide-react'
 import {
   api, type Item, type JudgeScorecard, type Metrics, type Project, type User, type Verdict,
@@ -319,6 +319,13 @@ export default function Results() {
           <h1 className="text-2xl font-semibold tracking-tight">Results</h1>
           {project && <Badge variant="secondary">{isLikert ? 'Likert (1–5)' : 'Binary'}</Badge>}
           <span className="text-sm text-muted-foreground">— how well your AI judges match the human panel</span>
+          {project?.experiment_url && (
+            <a href={project.experiment_url} target="_blank" rel="noreferrer"
+              className="ml-auto inline-flex items-center gap-1 text-sm text-primary hover:underline"
+              title="Every AI judge and human verdict is logged as an assessment on each response's MLflow trace">
+              <ExternalLink className="h-3.5 w-3.5" /> Validate in MLflow
+            </a>
+          )}
         </div>
       </div>
 

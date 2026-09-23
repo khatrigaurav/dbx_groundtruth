@@ -205,6 +205,9 @@ class Judgment(Base):
     verdict = Column(Enum(Verdict, native_enum=False), nullable=True)  # binary scale
     score = Column(Float, nullable=True)  # likert scale (1–5), also normalized fallback
     rationale = Column(Text, nullable=True)
+    # Id of the MLflow assessment mirroring this verdict onto the response's trace, so re-grades
+    # / re-reviews replace it instead of piling up duplicate assessments. Best-effort, may be null.
+    mlflow_assessment_id = Column(String(64), nullable=True)
     created_at = Column(DateTime(timezone=True), default=_now)
 
     response = relationship("Response", back_populates="judgments")
@@ -254,6 +257,7 @@ _ADDITIVE_COLUMNS = [
     ("projects", "genie_last_run_mode", "VARCHAR(20)"),
     ("projects", "blind_review", "BOOLEAN NOT NULL DEFAULT FALSE"),
     ("judgments", "judge_key", "VARCHAR(64)"),
+    ("judgments", "mlflow_assessment_id", "VARCHAR(64)"),
     ("generation_runs", "phase", "VARCHAR(20)"),
     ("generation_runs", "graded", "INTEGER NOT NULL DEFAULT 0"),
     ("generation_runs", "grade_total", "INTEGER NOT NULL DEFAULT 0"),

@@ -44,8 +44,11 @@ AVAILABLE_JUDGE_MODELS = [
     "databricks-claude-opus-4-5",
     "databricks-gpt-5",
     "databricks-meta-llama-3-3-70b-instruct",
-    "databricks-gemini-2-5-flash",
 ]
+
+# Endpoints Databricks has retired — no longer offered, and any project still configured with one
+# auto-heals to the default so its grading run doesn't hard-fail with a BAD_REQUEST.
+_DEPRECATED_MODELS = {"databricks-gemini-2-5-flash"}
 
 # The built-in + custom judge catalog surfaced to the UI.
 JUDGE_CATALOG = [
@@ -91,6 +94,8 @@ def _grade_concurrency() -> int:
 
 def _model_uri(name: str | None) -> str:
     name = (name or _default_model()).strip()
+    if name.split("/")[-1] in _DEPRECATED_MODELS:  # a saved-but-retired endpoint → fall back
+        name = _default_model()
     return name if name.startswith(("databricks:/", "endpoints:/")) else f"databricks:/{name}"
 
 

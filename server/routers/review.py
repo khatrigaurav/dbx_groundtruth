@@ -33,6 +33,7 @@ def submit_human_judgment(response_id: str, body: JudgmentCreate, db: Session = 
         existing.rationale = body.rationale
         db.commit()
         db.refresh(existing)
+        _mirror_to_mlflow(db, existing)
         return JudgmentOut.model_validate(existing, from_attributes=True)
 
     j = Judgment(
@@ -46,4 +47,12 @@ def submit_human_judgment(response_id: str, body: JudgmentCreate, db: Session = 
     db.add(j)
     db.commit()
     db.refresh(j)
+    _mirror_to_mlflow(db, j)
     return JudgmentOut.model_validate(j, from_attributes=True)
+
+
+def _mirror_to_mlflow(db: Session, judgment: Judgment) -> None:
+    """Best-effort: log the human verdict as an assessment on the response's MLflow trace."""
+    from server.services.mlflow_assessments import log_judgment
+
+    log_judgment(db, judgment)
