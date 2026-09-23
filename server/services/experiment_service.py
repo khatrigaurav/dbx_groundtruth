@@ -47,6 +47,15 @@ def _experiment_name(project) -> str:
     return f"{_BASE}/{slug or 'project'}-{project.id[:8]}"
 
 
+def _ensure_base_dir() -> None:
+    """Ensure the workspace folder that holds per-project experiments exists. MLflow's
+    create_experiment does not create intermediate folders, so a fresh workspace fails with
+    'Parent directory does not exist' without this. mkdirs is idempotent."""
+    from server.config import get_workspace_client
+
+    get_workspace_client().workspace.mkdirs(_BASE)
+
+
 def ensure_experiment(db, project) -> str | None:
     """Return the project's experiment id, creating it on first use. Best-effort."""
     if project.mlflow_experiment_id:
@@ -56,7 +65,11 @@ def ensure_experiment(db, project) -> str | None:
         name = _experiment_name(project)
         # get_experiment_by_name avoids a duplicate-name error on retries.
         existing = mlflow.get_experiment_by_name(name)
-        exp_id = existing.experiment_id if existing else mlflow.create_experiment(name)
+        if existing:
+            exp_id = existing.experiment_id
+        else:
+            _ensure_base_dir()  # create_experiment won't make intermediate workspace folders
+            exp_id = mlflow.create_experiment(name)
         project.mlflow_experiment_id = str(exp_id)
         db.commit()
         logger.info("Created MLflow experiment %s for project %s", exp_id, project.id)
