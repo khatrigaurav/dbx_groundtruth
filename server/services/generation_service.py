@@ -288,6 +288,9 @@ def _worker(project_id: str, item_ids: list[str], exp_id: str | None, mode: str,
                 # key on each trace (best-effort — never affects the run's outcome).
                 from server.services.mlflow_assessments import log_project_ai_judgments
                 log_project_ai_judgments(db, project_id)
+                # And log an Evaluation Run (replay of the same verdicts) for the Evaluations tab.
+                from server.services.mlflow_eval import run_evaluation_safe
+                run_evaluation_safe(db, project_id)
             except Exception as e:  # noqa: BLE001
                 logger.exception("grading phase failed for project %s", project_id)
                 errs.append(f"grading: {e}")

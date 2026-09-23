@@ -128,6 +128,20 @@ def results_summary(project_id: str, db: Session = Depends(get_db)):
     return SUMMARY.summarize_results(db, project_id)
 
 
+@router.post("/{project_id}/mlflow-eval")
+def mlflow_eval(project_id: str, db: Session = Depends(get_db)):
+    """Log an MLflow Evaluation Run from the stored judge verdicts (replay — no re-grading),
+    so results appear in the experiment's Evaluations tab. Errors are surfaced to the caller."""
+    if A.get_project_or_none(db, project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    from server.services import mlflow_eval as ME
+
+    try:
+        return ME.run_evaluation(db, project_id)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"MLflow evaluation failed: {e}") from e
+
+
 @router.delete("/{project_id}")
 def delete_project(project_id: str, db: Session = Depends(get_db)):
     p = A.get_project_or_none(db, project_id)

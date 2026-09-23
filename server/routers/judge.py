@@ -18,9 +18,11 @@ def run_judge(project_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Project not found")
     try:
         result = run_judge_for_project(db, project_id)
-        # Best-effort: mirror the AI verdicts into MLflow as trace assessments.
+        # Best-effort: mirror the AI verdicts into MLflow as trace assessments + an eval run.
         from server.services.mlflow_assessments import log_project_ai_judgments
+        from server.services.mlflow_eval import run_evaluation_safe
         log_project_ai_judgments(db, project_id)
+        run_evaluation_safe(db, project_id)
         return result
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"Judge run failed: {e}") from e

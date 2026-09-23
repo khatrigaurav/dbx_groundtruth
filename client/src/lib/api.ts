@@ -95,6 +95,9 @@ export const api = {
   judgeCatalog: () => req<{ judges: JudgeCatalogItem[]; models: string[] }>('GET', '/judge-catalog'),
   getMetrics: (id: string) => req<Metrics>('GET', `/projects/${id}/metrics`),
   resultsSummary: (id: string) => req<ResultsSummary>('POST', `/projects/${id}/results-summary`),
+  mlflowEval: (id: string) =>
+    req<{ detail?: string; evaluations_url?: string; n?: number; judges?: string[] }>(
+      'POST', `/projects/${id}/mlflow-eval`),
   generate: (id: string, mode: GenerationMode, grade = false, item_ids?: string[]) =>
     req<GenerateResult>('POST', `/projects/${id}/generate`, { mode, grade, item_ids }),
   generateStatus: (id: string) =>

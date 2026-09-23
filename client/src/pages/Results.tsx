@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
+import { toast } from 'sonner'
 import {
   ArrowLeft, Info, Sparkles, RefreshCw, Users, Bot, Key,
   CheckCircle2, AlertTriangle, XCircle, HelpCircle, Scale as ScaleIcon,
-  ChevronDown, ChevronUp, ExternalLink,
+  ChevronDown, ChevronUp, ExternalLink, FlaskConical,
 } from 'lucide-react'
 import {
   api, type Item, type JudgeScorecard, type Metrics, type Project, type User, type Verdict,
@@ -311,6 +312,17 @@ export default function Results() {
   const labelFor = (rid: string) => (emailOf[rid] || 'reviewer').split('@')[0]
   const shown = rows.filter(x => filter === 'all' ? true : filter === 'disagree' ? x.disagree : (x.human === 'fail' || x.ai === 'fail'))
 
+  const [evalBusy, setEvalBusy] = useState(false)
+  const runMlflowEval = async () => {
+    setEvalBusy(true)
+    const t = toast.loading('Logging MLflow evaluation run…')
+    try {
+      const r = await api.mlflowEval(id)
+      toast.success(r.detail || 'Evaluation run logged', { id: t })
+    } catch (e) { toast.error((e as Error).message, { id: t }) }
+    finally { setEvalBusy(false) }
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -319,13 +331,21 @@ export default function Results() {
           <h1 className="text-2xl font-semibold tracking-tight">Results</h1>
           {project && <Badge variant="secondary">{isLikert ? 'Likert (1–5)' : 'Binary'}</Badge>}
           <span className="text-sm text-muted-foreground">— how well your AI judges match the human panel</span>
-          {project?.experiment_url && (
-            <a href={project.experiment_url} target="_blank" rel="noreferrer"
-              className="ml-auto inline-flex items-center gap-1 text-sm text-primary hover:underline"
-              title="Every AI judge and human verdict is logged as an assessment on each response's MLflow trace">
-              <ExternalLink className="h-3.5 w-3.5" /> Validate in MLflow
-            </a>
-          )}
+          <div className="ml-auto flex items-center gap-3">
+            {project && (
+              <Button size="sm" variant="outline" onClick={runMlflowEval} disabled={evalBusy}
+                title="Log an MLflow Evaluation Run from the stored verdicts (replay — no re-grading), so results show in the Evaluations tab">
+                <FlaskConical className="h-4 w-4" /> {evalBusy ? 'Logging…' : 'Run MLflow evaluation'}
+              </Button>
+            )}
+            {project?.experiment_url && (
+              <a href={project.experiment_url} target="_blank" rel="noreferrer"
+                className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+                title="Every AI judge and human verdict is logged as an assessment on each response's MLflow trace">
+                <ExternalLink className="h-3.5 w-3.5" /> Validate in MLflow
+              </a>
+            )}
+          </div>
         </div>
       </div>
 
