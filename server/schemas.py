@@ -125,6 +125,39 @@ class JudgmentCreate(BaseModel):
     score: Optional[float] = None       # likert scale (1–5)
     rationale: Optional[str] = None
     rater_id: Optional[str] = None
+    # The evaluation dimension this verdict is about (an enabled AI-judge key, or "overall").
+    # Omitted → stored null (legacy single-verdict behaviour).
+    judge_key: Optional[str] = None
+
+
+class DimensionVerdict(BaseModel):
+    """One dimension's human verdict within a batch submit."""
+    judge_key: str
+    verdict: Optional[Verdict] = None
+    score: Optional[float] = None
+
+
+class JudgmentBatchCreate(BaseModel):
+    """A reviewer's verdicts across every enabled dimension for one response, saved together
+    with a single shared comment (rationale)."""
+    rater_id: Optional[str] = None
+    rationale: Optional[str] = None
+    dims: list[DimensionVerdict] = []
+
+
+class DisagreementReviewCreate(BaseModel):
+    judge_key: str
+    category: str
+    note: Optional[str] = None
+    reviewer_id: Optional[str] = None
+
+
+class DisagreementReviewOut(BaseModel):
+    response_id: str
+    judge_key: str
+    category: str
+    note: Optional[str] = None
+    reviewer_id: Optional[str] = None
 
 
 class IntakeResult(BaseModel):

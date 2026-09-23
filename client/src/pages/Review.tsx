@@ -2,12 +2,39 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { ArrowLeft, Check, X, ChevronLeft, ChevronRight } from 'lucide-react'
-import { api, getSession, type Item, type Project, type Verdict } from '../lib/api'
+import { api, getSession, type Item, type JudgeCatalogItem, type Project, type Verdict } from '../lib/api'
 import { Card, CardContent } from '../components/ui/card'
 import { Button } from '../components/ui/button'
 import { Textarea } from '../components/ui/textarea'
 import { Markdown } from '../components/Markdown'
 import { cn } from '../lib/utils'
+
+// Human-friendly dimension labels (kept in step with the backend judge catalog).
+const DIM_LABELS: Record<string, string> = {
+  correctness: 'Correctness', relevance: 'Relevance', safety: 'Safety',
+  groundedness: 'Groundedness', guidelines: 'Guidelines', custom: 'Custom', overall: 'Overall',
+}
+const dimLabel = (k: string) => DIM_LABELS[k] ?? k.charAt(0).toUpperCase() + k.slice(1)
+
+type Sel = Record<string, { verdict?: Verdict; score?: number }>
+
+// Shows the scoring rubric for a dimension: a high-level snippet by default (a long custom
+// instruction dump would swamp the page), expandable to the full text.
+function Rubric({ text, authored }: { text: string; authored: boolean }) {
+  const [open, setOpen] = useState(false)
+  const long = text.length > 160
+  const shown = open || !long ? text : text.slice(0, 160).replace(/\s+\S*$/, '') + '…'
+  return (
+    <div className="mb-2 rounded-md border border-primary/20 bg-primary/5 px-2.5 py-1.5 text-xs leading-snug text-muted-foreground">
+      <span className="font-semibold text-foreground">{authored ? 'Scoring rubric: ' : 'Scores: '}</span>{shown}
+      {long && (
+        <button type="button" onClick={() => setOpen(o => !o)} className="ml-1 font-medium text-primary hover:underline">
+          {open ? 'less' : 'more'}
+        </button>
+      )}
+    </div>
+  )
+}
 
 export default function Review() {
   const { id = '' } = useParams()
@@ -17,71 +44,126 @@ export default function Review() {
   const [items, setItems] = useState<Item[]>([])
   const [idx, setIdx] = useState(0)
   const [rationale, setRationale] = useState('')
+  const [sel, setSel] = useState<Sel>({})
+  const [catalog, setCatalog] = useState<JudgeCatalogItem[]>([])
   const savedRationale = useRef('')
+  // Mirrors `sel` synchronously so rapid clicks across dimensions merge correctly instead of
+  // racing on the render closure (which caused auto-advance to miss dimensions).
+  const selRef = useRef<Sel>({})
+  // The (item + dimensions) signature we last seeded local selections for. Guards the seed effect
+  // so background item updates (optimistic patches) never re-seed and clobber live clicks.
+  const seededSig = useRef<string>('')
   const isLikert = project?.scale === 'likert'
 
   useEffect(() => { api.listItems(id).then(setItems).catch(() => {}) }, [id])
   useEffect(() => { api.getProject(id).then(setProject).catch(() => {}) }, [id])
+  useEffect(() => { api.judgeCatalog().then(c => setCatalog(c.judges)).catch(() => {}) }, [])
+
+  // Dimensions = the project's enabled AI judges (1-1). Each carries the scoring rubric so the
+  // reviewer knows the criteria — the facilitator's own instructions for guidelines/custom
+  // judges, else the built-in judge's description. Falls back to a single "overall" verdict when
+  // no judges are configured.
+  const catById = useMemo(() => Object.fromEntries(catalog.map(c => [c.key, c])), [catalog])
+  const dims = useMemo(() => {
+    const enabled = (project?.judges || []).filter(j => j.enabled !== false)
+    const keys = enabled.length ? enabled.map(j => j.judge_key) : ['overall']
+    return keys.map(k => {
+      const pj = enabled.find(j => j.judge_key === k)
+      const rubric = (pj?.instructions || project?.judge_instructions || catById[k]?.description
+        || (k === 'overall' ? 'Overall quality of the response.' : '')).trim()
+      // guidelines/custom rubrics are facilitator-authored; built-ins describe what they check.
+      const authored = !!(pj?.instructions || (project?.judge_instructions && (k === 'guidelines' || k === 'custom')))
+      return { key: k, label: dimLabel(k), rubric, authored }
+    })
+  }, [project, catById])
 
   const item = items[idx]
   const response = item?.responses[0]
-  const myJudgment = useMemo(
-    () => response?.judgments.find(j => j.kind === 'human' && j.rater_id === user?.id),
-    [response, user],
-  )
-  const myVerdict = myJudgment?.verdict
-  const myScore = myJudgment?.score
-  const scored = isLikert ? myScore != null : !!myVerdict
 
+  // A reviewer's stored verdict for one dimension (legacy null-dimension rows count as "overall").
+  const myDim = (r: Item['responses'][number] | undefined, dim: string) =>
+    r?.judgments.find(j => j.kind === 'human' && j.rater_id === user?.id
+      && (j.judge_key === dim || (dim === 'overall' && !j.judge_key)))
+
+  const hasSel = (v?: { verdict?: Verdict; score?: number }) =>
+    isLikert ? v?.score != null : v?.verdict != null
+  const allScored = (s: Sel) => dims.length > 0 && dims.every(d => hasSel(s[d.key]))
+
+  // Seed local selections + comment from stored judgments only when the DISPLAYED item (or the
+  // dimension set) changes — never on a background items update, so optimistic patches and saves
+  // in flight can't overwrite what the reviewer is actively clicking.
   useEffect(() => {
-    const r = myJudgment?.rationale || ''
-    setRationale(r); savedRationale.current = r
-  }, [idx, myJudgment])
+    if (!item) return
+    const sig = `${item.id}|${dims.map(d => d.key).join(',')}`
+    if (seededSig.current === sig) return
+    seededSig.current = sig
+    const s: Sel = {}
+    let note = ''
+    for (const d of dims) {
+      const j = myDim(response, d.key)
+      if (j) { s[d.key] = { verdict: j.verdict, score: j.score ?? undefined }; note = note || (j.rationale || '') }
+    }
+    selRef.current = s; setSel(s); setRationale(note); savedRationale.current = note
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item?.id, dims])
 
-  // Per-item done-state for the navigator list.
+  // Per-item completeness for the navigator (how many dimensions this reviewer has scored).
   const myStates = useMemo(() => items.map(it => {
     const r = it.responses[0]
-    const j = r?.judgments.find(x => x.kind === 'human' && x.rater_id === user?.id)
-    return { verdict: j?.verdict, score: j?.score }
-  }), [items, user])
+    let done = 0
+    for (const d of dims) { if (hasSel({ verdict: myDim(r, d.key)?.verdict, score: myDim(r, d.key)?.score ?? undefined })) done++ }
+    return { done, total: dims.length }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [items, user, dims, isLikert])
 
-  // Persist a comment edit without changing the score (fixes lost-comment bug).
-  async function flushComment() {
-    if (!response || !scored) return
-    if (rationale === savedRationale.current) return
-    try {
-      await api.submitJudgment(response.id, { verdict: myVerdict, score: myScore, rationale, rater_id: user?.id })
-      savedRationale.current = rationale
-      const fresh = await api.listItems(id); setItems(fresh)
-      toast.success('Comment saved')
-    } catch (e) { toast.error((e as Error).message) }
+  // Patch the reviewer's verdicts into the local items in memory, so the navigator and any
+  // return-visit reflect them instantly — no server round-trip on the scoring path.
+  function patchItems(responseId: string, nextSel: Sel, note: string) {
+    setItems(prev => prev.map(it => {
+      const r = it.responses[0]
+      if (!r || r.id !== responseId) return it
+      const judgments = [...r.judgments]
+      for (const d of dims) {
+        const v = nextSel[d.key]
+        if (!v || (v.verdict == null && v.score == null)) continue
+        const at = judgments.findIndex(j => j.kind === 'human' && j.rater_id === user?.id
+          && (j.judge_key === d.key || (d.key === 'overall' && !j.judge_key)))
+        const row = { id: at >= 0 ? judgments[at].id : `local:${responseId}:${d.key}`,
+          kind: 'human' as const, rater_id: user?.id, judge_key: d.key,
+          verdict: v.verdict, score: v.score, rationale: note }
+        if (at >= 0) judgments[at] = row; else judgments.push(row)
+      }
+      return { ...it, responses: [{ ...r, judgments }, ...it.responses.slice(1)] }
+    }))
   }
 
-  async function goTo(next: number) {
-    await flushComment()
+  // Optimistic, non-blocking save: update local state now, persist in the background.
+  function save(nextSel: Sel) {
+    if (!response) return
+    const payload = dims
+      .map(d => ({ judge_key: d.key, ...(nextSel[d.key] || {}) }))
+      .filter(d => d.verdict != null || d.score != null)
+    if (payload.length === 0 && rationale === savedRationale.current) return
+    patchItems(response.id, nextSel, rationale)
+    savedRationale.current = rationale
+    api.submitJudgments(response.id, { rater_id: user?.id, rationale, dims: payload })
+      .catch(e => toast.error((e as Error).message))
+  }
+
+  function pick(dimKey: string, value: Verdict | number) {
+    const prev = selRef.current
+    const next: Sel = { ...prev, [dimKey]: isLikert ? { score: value as number } : { verdict: value as Verdict } }
+    selRef.current = next
+    setSel(next)
+    save(next)
+    // Advance only on the click that COMPLETES the item (all dimensions now scored) — not on
+    // every click, and not when re-editing an already-complete item.
+    if (allScored(next) && !allScored(prev) && idx < items.length - 1) setIdx(idx + 1)
+  }
+
+  function goTo(next: number) {
+    save(selRef.current)  // flush any comment edit before switching
     setIdx(Math.max(0, Math.min(items.length - 1, next)))
-  }
-
-  async function judgeBinary(verdict: Verdict) {
-    if (!response) return
-    try {
-      await api.submitJudgment(response.id, { verdict, rationale, rater_id: user?.id })
-      savedRationale.current = rationale
-      const fresh = await api.listItems(id); setItems(fresh)
-      toast.success(`Marked ${verdict}`)
-      if (idx < items.length - 1) setIdx(idx + 1)
-    } catch (e) { toast.error((e as Error).message) }
-  }
-
-  async function judgeScore(score: number) {
-    if (!response) return
-    try {
-      await api.submitJudgment(response.id, { score, rationale, rater_id: user?.id })
-      savedRationale.current = rationale
-      const fresh = await api.listItems(id); setItems(fresh)
-      toast.success(`Rated ${score}`)
-      if (idx < items.length - 1) setIdx(idx + 1)
-    } catch (e) { toast.error((e as Error).message) }
   }
 
   if (items.length === 0) {
@@ -93,7 +175,7 @@ export default function Review() {
     )
   }
   if (!item) return null
-  const reviewedCount = myStates.filter(s => s.verdict || s.score != null).length
+  const reviewedCount = myStates.filter(s => s.total > 0 && s.done === s.total).length
 
   return (
     <div className="grid gap-6 lg:grid-cols-[260px_1fr]">
@@ -104,22 +186,28 @@ export default function Review() {
         <div className="max-h-[70vh] space-y-1 overflow-auto pr-1">
           {items.map((it, i) => {
             const s = myStates[i]
+            const full = s.total > 0 && s.done === s.total
+            const partial = s.done > 0 && !full
             return (
               <button key={it.id} onClick={() => goTo(i)}
                 className={cn('flex w-full items-center gap-2 rounded-md border px-2.5 py-2 text-left text-sm transition-colors',
                   i === idx ? 'border-primary bg-accent' : 'border-transparent hover:bg-muted')}>
                 <span className={cn('grid h-5 w-5 shrink-0 place-items-center rounded-full text-[11px]',
-                  s.verdict === 'pass' ? 'bg-success text-success-foreground'
-                    : s.verdict === 'fail' ? 'bg-destructive text-destructive-foreground'
-                      : s.score != null ? 'bg-primary text-primary-foreground'
-                        : 'bg-muted text-muted-foreground')}>
-                  {s.verdict === 'pass' ? <Check className="h-3 w-3" /> : s.verdict === 'fail' ? <X className="h-3 w-3" /> : s.score != null ? s.score : i + 1}
+                  full ? 'bg-success text-success-foreground'
+                    : partial ? 'bg-amber-400 text-amber-950'
+                      : 'bg-muted text-muted-foreground')}>
+                  {full ? <Check className="h-3 w-3" /> : partial ? `${s.done}` : i + 1}
                 </span>
                 <span className="truncate">{it.question}</span>
               </button>
             )
           })}
         </div>
+        {dims.length > 1 && (
+          <div className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
+            Score each response on {dims.length} dimensions: {dims.map(d => d.label).join(', ')}.
+          </div>
+        )}
       </aside>
 
       {/* Current item */}
@@ -147,30 +235,40 @@ export default function Review() {
 
             <div>
               <Textarea placeholder="Comment (optional) — saved automatically" rows={2}
-                value={rationale} onChange={e => setRationale(e.target.value)} onBlur={flushComment} />
+                value={rationale} onChange={e => setRationale(e.target.value)} onBlur={() => save(selRef.current)} />
             </div>
 
-            {isLikert ? (
-              <div>
-                <div className="mb-1.5 text-xs text-muted-foreground">Rate 1 (poor) to 5 (excellent)</div>
-                <div className="flex gap-2">
-                  {[1, 2, 3, 4, 5].map(n => (
-                    <Button key={n} variant={myScore === n ? 'default' : 'outline'} className="flex-1" disabled={!response} onClick={() => judgeScore(n)}>
-                      {n}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <div className="flex gap-3">
-                <Button variant={myVerdict === 'pass' ? 'success' : 'outline'} className="flex-1" disabled={!response} onClick={() => judgeBinary('pass')}>
-                  <Check className="h-4 w-4" /> Pass
-                </Button>
-                <Button variant={myVerdict === 'fail' ? 'destructive' : 'outline'} className="flex-1" disabled={!response} onClick={() => judgeBinary('fail')}>
-                  <X className="h-4 w-4" /> Fail
-                </Button>
-              </div>
-            )}
+            {/* One control group per dimension (1-1 with the enabled AI judges). */}
+            <div className="space-y-3">
+              {dims.map(d => {
+                const cur = sel[d.key]
+                return (
+                  <div key={d.key} className="rounded-md border bg-card px-3 py-2.5">
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <span className="text-sm font-medium">{d.label}</span>
+                      {!hasSel(cur) && <span className="text-[11px] text-muted-foreground">not scored</span>}
+                    </div>
+                    {d.rubric && <Rubric text={d.rubric} authored={d.authored} />}
+                    {isLikert ? (
+                      <div className="flex gap-2">
+                        {[1, 2, 3, 4, 5].map(n => (
+                          <Button key={n} size="sm" variant={cur?.score === n ? 'default' : 'outline'} className="flex-1"
+                            disabled={!response} onClick={() => pick(d.key, n)}>{n}</Button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="flex gap-3">
+                        <Button size="sm" variant={cur?.verdict === 'pass' ? 'success' : 'outline'} className="flex-1"
+                          disabled={!response} onClick={() => pick(d.key, 'pass')}><Check className="h-4 w-4" /> Pass</Button>
+                        <Button size="sm" variant={cur?.verdict === 'fail' ? 'destructive' : 'outline'} className="flex-1"
+                          disabled={!response} onClick={() => pick(d.key, 'fail')}><X className="h-4 w-4" /> Fail</Button>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+              {isLikert && <div className="text-[11px] text-muted-foreground">Rate 1 (poor) to 5 (excellent) per dimension.</div>}
+            </div>
           </CardContent>
         </Card>
 

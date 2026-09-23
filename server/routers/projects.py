@@ -7,10 +7,12 @@ from sqlalchemy.orm import Session
 
 from server import auth_service as A
 from server.database import (
+    DisagreementReview,
     Item,
     Project,
     ProjectJudge,
     ProjectMember,
+    Response,
     User,
     UserRole,
     get_db,
@@ -118,6 +120,24 @@ def project_metrics(project_id: str, db: Session = Depends(get_db)):
     return METRICS.project_metrics(db, project_id)
 
 
+@router.get("/{project_id}/disagreements")
+def list_disagreements(project_id: str, db: Session = Depends(get_db)):
+    """Saved gold-label audit classifications for this project's responses, keyed for the UI as
+    `{response_id}:{judge_key}` so the Results diagnostics panel can show/resume them."""
+    if A.get_project_or_none(db, project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    rows = (
+        db.query(DisagreementReview)
+        .join(Response, Response.id == DisagreementReview.response_id)
+        .join(Item, Item.id == Response.item_id)
+        .filter(Item.project_id == project_id)
+        .all()
+    )
+    return {f"{r.response_id}:{r.judge_key}": {
+        "category": r.category.value, "note": r.note, "reviewer_id": r.reviewer_id}
+        for r in rows}
+
+
 @router.post("/{project_id}/results-summary")
 def results_summary(project_id: str, db: Session = Depends(get_db)):
     """LLM-written plain-English read of the Results (judge trustworthiness, biases, next step)."""
@@ -125,7 +145,10 @@ def results_summary(project_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Project not found")
     from server.services import summary_service as SUMMARY
 
-    return SUMMARY.summarize_results(db, project_id)
+    try:
+        return SUMMARY.summarize_results(db, project_id)
+    except Exception as e:  # noqa: BLE001 — surface a message instead of a 500 blank panel
+        return {"detail": f"Couldn't build the summary: {e}"}
 
 
 @router.post("/{project_id}/mlflow-eval")

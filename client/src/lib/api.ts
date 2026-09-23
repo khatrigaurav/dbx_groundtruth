@@ -22,31 +22,60 @@ export interface Response { id: string; response_text: string; model_name?: stri
 export interface Item { id: string; question: string; expected_answer?: string; source: string; responses: Response[] }
 
 export interface JudgeCatalogItem { key: string; label: string; description: string; uses_answer_key: boolean; needs_context: boolean; is_custom: boolean }
-export interface PerRater { rater: string; label: string; kind: 'llm' | 'human'; n: number; mean?: number; pass_rate?: number }
 export type GateVerdict = 'pass' | 'review' | 'fail' | 'insufficient'
-export interface TrustGate { verdict: GateVerdict; reason: string }
-export interface JudgeScorecard {
-  judge_key: string; label: string; n: number; gate: TrustGate; bias: number | null
+export interface TrustGate { verdict: GateVerdict; reason: string; warnings?: string[] }
+export type AgreementLevel = 'high' | 'moderate' | 'low' | 'n/a'
+export type Calibration = 'lenient' | 'harsh' | 'balanced'
+
+// Inter-reviewer agreement for one dimension (humans only) — answered before AI-vs-human.
+export interface HumanAgreement {
+  n_raters: number; n_multi_rated: number
+  alpha: number | null; alpha_ci: [number | null, number | null]
+  computable: boolean; level: AgreementLevel
+}
+// The AI judge's agreement with the human panel on the SAME dimension.
+export interface AiVsHuman {
+  n: number
   // binary
+  n_pos?: number; n_neg?: number
   confusion?: { tp: number; fp: number; fn: number; tn: number }
-  accuracy?: number | null; precision?: number | null; recall?: number | null
-  specificity?: number | null; f1?: number | null; f1_ci?: [number | null, number | null]
-  balanced_accuracy?: number | null; mcc?: number | null; cohen_kappa?: number | null
+  accuracy?: number | null; precision?: number | null; recall?: number | null; specificity?: number | null
+  f1?: number | null; balanced_accuracy?: number | null; balanced_accuracy_ci?: [number | null, number | null]
+  mcc?: number | null; cohen_kappa?: number | null
+  bias?: number | null; judge_pass_rate?: number | null; human_pass_rate?: number | null
+  calibration?: Calibration | null
+  single_class_judge?: boolean; single_class_gold?: boolean
   // likert
-  spearman?: number | null; spearman_ci?: [number | null, number | null]; qwk?: number | null
-  mae?: number | null; rmse?: number | null; human_mean?: number | null; judge_mean?: number | null
+  mae?: number | null; rmse?: number | null; spearman?: number | null; spearman_ci?: [number | null, number | null]
+  qwk?: number | null; human_mean?: number | null; judge_mean?: number | null
+}
+export interface DimensionAudit {
+  n_disagreements: number; n_audited: number; corrected: number; excluded: number
+  full: boolean; gate_basis: 'raw' | 'adjudicated'
+}
+export interface DimensionCard {
+  key: string; label: string
+  human: HumanAgreement
+  n_gold: number; has_ai_judge: boolean; small_sample: boolean
+  ai_vs_human: AiVsHuman | null
+  ai_vs_human_adjudicated?: AiVsHuman | null
+  audit?: DimensionAudit | null
+  gate: TrustGate
+  audited: number
 }
 export interface Metrics {
-  scale: Scale; level: string
-  n_items: number; n_responses: number; n_gold: number; n_reviewers: number; n_judges: number
-  n_units_multi_rated: number; small_sample: boolean
+  scale: Scale; level: string; small_sample_threshold: number
+  n_items: number; n_responses: number; n_reviewers: number; n_dimensions: number
+  primary_dimension: string | null
   answer_key_coverage: { with_key: number; total: number }
-  alpha_all: number | null; alpha_all_ci: [number | null, number | null]
-  alpha_humans: number | null; alpha_humans_ci: [number | null, number | null]
-  human_pass_rate: number | null; human_mean: number | null
-  per_rater: PerRater[]; judges: JudgeScorecard[]; primary_judge: string | null
+  panel_agreement_computable: boolean
+  dimensions: DimensionCard[]
 }
-export interface ResultsSummary { summary?: string; model?: string; detail?: string; n_gold?: number; small_sample?: boolean }
+export type DisagreementCategory =
+  | 'ai_incorrect' | 'human_label_incorrect' | 'ambiguous_question' | 'ambiguous_rubric'
+  | 'different_interpretation' | 'insufficient_evidence' | 'other'
+export interface DisagreementAudit { category: DisagreementCategory; note?: string; reviewer_id?: string }
+export interface ResultsSummary { summary?: string; model?: string; detail?: string; fallback?: boolean; note?: string; n_gold?: number; small_sample?: boolean }
 export interface GenerateResult {
   mode: GenerationMode; generated: number; run_id?: string; run_url?: string
   genie_url?: string; experiment_id?: string; experiment_url?: string
@@ -115,8 +144,15 @@ export const api = {
     return req<{ items_created: number; responses_created: number; warnings: string[]; detail?: string }>(
       'POST', `/projects/${projectId}/intake/csv`, fd, true)
   },
-  submitJudgment: (responseId: string, v: { verdict?: Verdict; score?: number; rationale?: string; rater_id?: string }) =>
+  submitJudgment: (responseId: string, v: { verdict?: Verdict; score?: number; rationale?: string; rater_id?: string; judge_key?: string }) =>
     req<Judgment>('POST', `/responses/${responseId}/judgment`, v),
+  // Save a reviewer's verdicts across every dimension for one response, with a shared comment.
+  submitJudgments: (responseId: string, body: { rater_id?: string; rationale?: string; dims: { judge_key: string; verdict?: Verdict; score?: number }[] }) =>
+    req<Judgment[]>('POST', `/responses/${responseId}/judgments`, body),
+  classifyDisagreement: (responseId: string, body: { judge_key: string; category: DisagreementCategory; note?: string; reviewer_id?: string }) =>
+    req<{ response_id: string; judge_key: string; category: DisagreementCategory }>('POST', `/responses/${responseId}/disagreement`, body),
+  listDisagreements: (projectId: string) =>
+    req<Record<string, DisagreementAudit>>('GET', `/projects/${projectId}/disagreements`),
   runJudge: (projectId: string) =>
     req<{ judged: number; detail?: string; errors?: string[] }>('POST', `/projects/${projectId}/run-judge`),
 }

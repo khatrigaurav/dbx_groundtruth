@@ -241,6 +241,34 @@ def bootstrap_ci(gold: list[float], pred: list[float], stat_fn,
     return (lo, hi)
 
 
+# --- calibration & agreement labels ------------------------------------------
+
+
+def calibration_label(bias: float | None, scale: str) -> str | None:
+    """Systematic leniency/harshness from the signed bias (pred − gold; + = judge scores higher).
+    Reported separately from agreement so a well-calibrated-but-noisy judge isn't confused with a
+    biased one."""
+    if bias is None:
+        return None
+    tol = 0.25 if scale == "likert" else 0.1
+    if bias > tol:
+        return "lenient"
+    if bias < -tol:
+        return "harsh"
+    return "balanced"
+
+
+def agreement_label(primary: float | None) -> str:
+    """Coarse high/moderate/low bucket for a κ-like or ρ-like agreement statistic."""
+    if primary is None:
+        return "n/a"
+    if primary >= 0.6:
+        return "high"
+    if primary >= 0.4:
+        return "moderate"
+    return "low"
+
+
 # --- trust gate --------------------------------------------------------------
 
 # Minimum gold-labeled units before we're willing to render a verdict at all.

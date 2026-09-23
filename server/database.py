@@ -200,7 +200,11 @@ class Judgment(Base):
     response_id = Column(String(32), ForeignKey("responses.id"), nullable=False, index=True)
     kind = Column(Enum(JudgmentKind, native_enum=False), nullable=False)
     rater_id = Column(String(32), ForeignKey("users.id"), nullable=True)  # null for llm
-    # For llm judgments, which judge produced this row (correctness/guidelines/… or custom).
+    # The evaluation *dimension* this verdict is about — always an AI-judge key
+    # (correctness/relevance/safety/groundedness/guidelines/custom) or the legacy "overall".
+    # For llm judgments this is the judge that produced the row; for human judgments it is the
+    # dimension the reviewer scored (1-1 with the enabled AI judges). Legacy human rows are null
+    # and fold into the project's primary dimension for metrics.
     judge_key = Column(String(64), nullable=True)
     verdict = Column(Enum(Verdict, native_enum=False), nullable=True)  # binary scale
     score = Column(Float, nullable=True)  # likert scale (1–5), also normalized fallback
@@ -211,6 +215,33 @@ class Judgment(Base):
     created_at = Column(DateTime(timezone=True), default=_now)
 
     response = relationship("Response", back_populates="judgments")
+
+
+class DisagreementCategory(str, enum.Enum):
+    """How a reviewer classifies an AI-judge-vs-human disagreement during the gold-label audit."""
+    AI_INCORRECT = "ai_incorrect"
+    HUMAN_LABEL_INCORRECT = "human_label_incorrect"
+    AMBIGUOUS_QUESTION = "ambiguous_question"
+    AMBIGUOUS_RUBRIC = "ambiguous_rubric"
+    DIFFERENT_INTERPRETATION = "different_interpretation"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+    OTHER = "other"
+
+
+class DisagreementReview(Base):
+    """Gold-label audit: a reviewer's classification of a single (response, dimension)
+    disagreement between an AI judge and the human panel. One row per (response, judge_key):
+    upserted so re-auditing replaces the prior verdict rather than piling up."""
+    __tablename__ = "disagreement_reviews"
+    __table_args__ = (UniqueConstraint("response_id", "judge_key", name="uq_disagreement_dim"),)
+    id = Column(String(32), primary_key=True, default=_uuid)
+    response_id = Column(String(32), ForeignKey("responses.id"), nullable=False, index=True)
+    judge_key = Column(String(64), nullable=False)  # the dimension the disagreement is on
+    category = Column(Enum(DisagreementCategory, native_enum=False), nullable=False)
+    note = Column(Text, nullable=True)
+    reviewer_id = Column(String(32), ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_now)
+    updated_at = Column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
 # --- engine / session --------------------------------------------------------

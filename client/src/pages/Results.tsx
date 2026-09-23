@@ -3,11 +3,13 @@ import { Link, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
   ArrowLeft, Info, Sparkles, RefreshCw, Users, Bot, Key,
-  CheckCircle2, AlertTriangle, XCircle, HelpCircle, Scale as ScaleIcon,
+  CheckCircle2, AlertTriangle, XCircle, HelpCircle, Layers,
   ChevronDown, ChevronUp, ExternalLink, FlaskConical,
 } from 'lucide-react'
 import {
-  api, type Item, type JudgeScorecard, type Metrics, type Project, type User, type Verdict,
+  api, type AiVsHuman, type DimensionCard as DimCard, type DisagreementAudit,
+  type DisagreementCategory, type HumanAgreement as HumanAgreementT,
+  type Item, type Metrics, type Project, type User, type Verdict,
 } from '../lib/api'
 import { Card, CardContent } from '../components/ui/card'
 import { Badge } from '../components/ui/badge'
@@ -28,7 +30,17 @@ const fmt = (x: number | null | undefined) => (x == null || Number.isNaN(x) ? '�
 const ciText = (ci?: [number | null, number | null]) =>
   ci && ci[0] != null && ci[1] != null ? `95% CI ${ci[0].toFixed(2)}–${ci[1].toFixed(2)}` : undefined
 
-// --- trust gate styling ------------------------------------------------------
+const DISAGREEMENT_CATS: [DisagreementCategory, string][] = [
+  ['ai_incorrect', 'AI judge incorrect'],
+  ['human_label_incorrect', 'Human label incorrect'],
+  ['ambiguous_question', 'Ambiguous question'],
+  ['ambiguous_rubric', 'Ambiguous rubric'],
+  ['different_interpretation', 'Different reasonable interpretation'],
+  ['insufficient_evidence', 'Insufficient evidence'],
+  ['other', 'Other'],
+]
+
+// --- trust gate + agreement styling -----------------------------------------
 const GATE = {
   pass: { label: 'Trusted', cls: 'bg-success text-success-foreground', Icon: CheckCircle2 },
   review: { label: 'Spot-check', cls: 'bg-amber-500 text-white', Icon: AlertTriangle },
@@ -36,13 +48,41 @@ const GATE = {
   insufficient: { label: 'Need data', cls: 'bg-muted text-muted-foreground', Icon: HelpCircle },
 } as const
 
-function GateBadge({ verdict }: { verdict: keyof typeof GATE }) {
+const AGREE = {
+  high: 'bg-success/15 text-success border-success/30',
+  moderate: 'bg-amber-100 text-amber-800 border-amber-300',
+  low: 'bg-destructive/10 text-destructive border-destructive/30',
+  'n/a': 'bg-muted text-muted-foreground border-transparent',
+} as const
+
+function GateBadge({ verdict, hint }: { verdict: keyof typeof GATE; hint?: string }) {
   const g = GATE[verdict]
   return (
     <span className={cn('inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold', g.cls)}>
       <g.Icon className="h-3.5 w-3.5" /> {g.label}
+      {hint && <Tip text={hint} />}
     </span>
   )
+}
+
+// Context-aware "what to do next" for the gate badge tooltip.
+function nextStep(card: DimCard): string {
+  const v = card.gate.verdict
+  const a = card.ai_vs_human
+  if (v === 'insufficient') {
+    if (!card.has_ai_judge) return 'Next: enable an AI judge for this dimension in “Build AI judges”, then grade.'
+    if (a?.single_class_gold || (a && (a.n_neg === 0 || a.n_pos === 0)))
+      return 'Next: humans labeled only one class here — add clear examples of the missing class (both a pass and a fail), then re-review.'
+    return `Next: only ${card.n_gold} gold-labeled item(s). Have reviewers grade more on this dimension (aim ≥15, with both pass and fail), then reopen Results.`
+  }
+  if (v === 'fail') {
+    if (a?.single_class_judge) return 'Next: the judge predicts one class for everything — tighten its rubric in “Build AI judges” and re-grade.'
+    if (card.human.computable && card.human.level === 'low')
+      return 'Next: reviewers barely agree here, so the rubric is ambiguous — fix the rubric/answer key and re-review before blaming the judge.'
+    return 'Next: don’t rely on this judge. Audit its disagreements below, refine its rubric, and re-grade — or fix ambiguous gold labels.'
+  }
+  if (v === 'review') return 'Next: usable with human spot-checks — audit the disagreements below before trusting it unattended.'
+  return 'Trustworthy on this dimension — keep periodic spot-checks.'
 }
 
 // Hover/focus tooltip — an info dot that reveals what a metric measures. No extra deps.
@@ -64,7 +104,6 @@ function VerdictCell({ v, s }: { v?: V; s?: number }) {
   return <Badge variant={v === 'pass' ? 'success' : 'destructive'} className="capitalize">{v}</Badge>
 }
 
-// A labeled metric with an optional sub-line (CI) and hover explanation.
 function Metric({ label, value, sub, hint, big }: { label: string; value: string; sub?: string; hint?: string; big?: boolean }) {
   return (
     <div className="rounded-lg border bg-card px-3 py-2">
@@ -102,81 +141,170 @@ function Confusion({ c }: { c: { tp: number; fp: number; fn: number; tn: number 
   )
 }
 
-function Bias({ bias, scale }: { bias: number | null; scale: string }) {
-  if (bias == null) return null
-  const lenient = bias > 0
-  const mag = Math.abs(bias)
-  if (mag < (scale === 'likert' ? 0.15 : 0.03)) {
-    return <span className="text-xs text-muted-foreground">well-calibrated (bias {bias >= 0 ? '+' : ''}{bias.toFixed(2)})</span>
-  }
+function CalibrationChip({ cal, bias, scale }: { cal?: string | null; bias?: number | null; scale: string }) {
+  if (!cal) return null
+  const b = bias == null ? '' : ` (${bias >= 0 ? '+' : ''}${bias.toFixed(2)}${scale === 'likert' ? ' pts' : ''} vs humans)`
+  const cls = cal === 'lenient' ? 'text-amber-600' : cal === 'harsh' ? 'text-sky-600' : 'text-muted-foreground'
   return (
-    <span className={cn('text-xs font-medium', lenient ? 'text-amber-600' : 'text-sky-600')}>
-      {lenient ? 'lenient' : 'harsh'} · {bias >= 0 ? '+' : ''}{bias.toFixed(2)} vs humans
+    <span className={cn('text-xs font-medium', cls)}>
+      Calibration: {cal}{b}
+      <Tip text="Systematic leniency/harshness — how much more (or less) often the judge passes vs the human panel. Reported separately from agreement: a judge can agree yet still be biased." />
     </span>
   )
 }
 
-function JudgeCard({ card, scale, primary }: { card: JudgeScorecard; scale: string; primary: boolean }) {
-  const isLikert = scale === 'likert'
-  const insufficient = card.gate.verdict === 'insufficient'
+// Answer #1: do humans agree on the rubric? Shown before any AI-vs-human number.
+function HumanAgreementStrip({ h }: { h: HumanAgreementT }) {
+  if (h.n_raters < 2) {
+    return (
+      <div className="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+        <Users className="mr-1 inline h-3.5 w-3.5" />
+        {h.n_raters === 0 ? 'No human reviews on this dimension yet.'
+          : 'Single reviewer — panel agreement can’t be measured. Add a 2nd reviewer to check the rubric before trusting the judge.'}
+      </div>
+    )
+  }
+  const level = h.level as keyof typeof AGREE
   return (
-    <Card className={cn(primary && 'ring-2 ring-primary/30')}>
-      <CardContent className="space-y-3 py-4">
+    <div className={cn('flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-xs', AGREE[level])}>
+      <Users className="h-3.5 w-3.5" />
+      <span className="font-semibold">Reviewer agreement: {level}</span>
+      <span className="tabular-nums">α {fmt(h.alpha)}{ciText(h.alpha_ci) ? ` · ${ciText(h.alpha_ci)}` : ''}</span>
+      <span className="text-current/70">· {h.n_raters} reviewers, {h.n_multi_rated} co-rated</span>
+      <Tip text="Inter-reviewer Krippendorff's α for this dimension only. Answered first: if reviewers don't agree, the rubric is ambiguous and low AI agreement is not proof the judge is bad." />
+      {level === 'low' && <span className="font-medium">— ambiguous rubric; audit gold labels first.</span>}
+    </div>
+  )
+}
+
+function AiVsHumanBinary({ a }: { a: AiVsHuman }) {
+  return (
+    <>
+      <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+        <span className="rounded bg-success/10 px-1.5 py-0.5 text-success">{a.n_pos ?? 0} human pass</span>
+        <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-destructive">{a.n_neg ?? 0} human fail</span>
+        {a.confusion && <span>· {a.confusion.fp} false-pos, {a.confusion.fn} false-neg</span>}
+      </div>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <Metric big label="Balanced acc." value={fmt(a.balanced_accuracy)} sub={ciText(a.balanced_accuracy_ci)}
+          hint="Average of recall and specificity — the headline metric under class imbalance (accuracy alone is misleading when most labels are one class)." />
+        <Metric label="MCC" value={fmt(a.mcc)}
+          hint="Matthews correlation — robust to class imbalance. −1 to +1; >0.5 strong." />
+        <Metric label="Cohen's κ" value={fmt(a.cohen_kappa)}
+          hint="Chance-corrected agreement with the human panel. ≥0.6 substantial, ≥0.8 near-perfect." />
+        <Metric label="F1" value={fmt(a.f1)}
+          hint="Harmonic mean of precision and recall. Can look high even when specificity is 0 — read it alongside balanced accuracy." />
+        <Metric label="Precision" value={fmt(a.precision)} hint="Of items the judge passed, how many humans also passed." />
+        <Metric label="Recall" value={fmt(a.recall)} hint="Of items humans passed, how many the judge also passed." />
+        <Metric label="Specificity" value={fmt(a.specificity)} hint="Of items humans FAILED, how many the judge also failed — its ability to catch failures." />
+        <Metric label="Accuracy" value={fmt(a.accuracy)} hint="Raw share of agreeing items. Inflated under class imbalance — don't read alone." />
+      </div>
+      <div className="grid gap-2 sm:grid-cols-[1fr_auto] sm:items-center">
+        {a.confusion && <Confusion c={a.confusion} />}
+        <div className="sm:pl-2"><CalibrationChip cal={a.calibration} bias={a.bias} scale="binary" /></div>
+      </div>
+    </>
+  )
+}
+
+function AiVsHumanLikert({ a }: { a: AiVsHuman }) {
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        <Metric big label="Spearman ρ" value={fmt(a.spearman)} sub={ciText(a.spearman_ci)}
+          hint="Rank correlation between judge and human scores. 1 = identical ordering." />
+        <Metric label="QWK" value={fmt(a.qwk)} hint="Quadratic weighted kappa — the standard ordinal-agreement metric for graded scoring." />
+        <Metric label="MAE" value={fmt(a.mae)} hint="Mean absolute error between judge and human scores (points on 1–5)." />
+        <Metric label="RMSE" value={fmt(a.rmse)} hint="Root-mean-square error — penalizes large misses more than MAE." />
+        <Metric label="Judge mean" value={fmt(a.judge_mean)} hint="Average score this judge gave." />
+        <Metric label="Human mean" value={fmt(a.human_mean)} hint="Average score the human panel gave on the same items." />
+      </div>
+      <CalibrationChip cal={a.calibration} bias={a.bias} scale="likert" />
+    </>
+  )
+}
+
+// Shows how the gold-label audit moves the headline metric and whether it's driving the verdict.
+function AdjudicationStrip({ card, isLikert }: { card: DimCard; isLikert: boolean }) {
+  const au = card.audit
+  const raw = card.ai_vs_human
+  const adj = card.ai_vs_human_adjudicated
+  if (!au || au.n_disagreements === 0 || !raw) return null
+  const rawV = isLikert ? raw.spearman : raw.balanced_accuracy
+  const adjV = adj ? (isLikert ? adj.spearman : adj.balanced_accuracy) : null
+  const label = isLikert ? 'Spearman ρ' : 'Balanced acc.'
+  const changed = au.corrected + au.excluded > 0
+  const remaining = au.n_disagreements - au.n_audited
+  return (
+    <div className="rounded-md border bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
+      <div className="font-semibold text-foreground">Gold-label audit</div>
+      <div className="mt-0.5">
+        {au.n_audited}/{au.n_disagreements} disagreements classified · {au.corrected} gold-label correction(s), {au.excluded} excluded.
+      </div>
+      {changed && (
+        <div className="mt-0.5">{label} <span className="tabular-nums">{fmt(rawV)}</span> → <span className="font-semibold tabular-nums">{fmt(adjV)}</span> after adjudication.</div>
+      )}
+      <div className="mt-0.5">
+        {au.gate_basis === 'adjudicated'
+          ? <span className="font-medium text-success">✓ Verdict uses adjudicated labels.</span>
+          : remaining > 0
+            ? <span>Classify the remaining {remaining} disagreement(s) to apply the audit to the verdict.</span>
+            : <span>No gold-label corrections needed — verdict unchanged.</span>}
+      </div>
+    </div>
+  )
+}
+
+function DimensionCard({ card, scale, primary }: { card: DimCard; scale: string; primary: boolean }) {
+  const isLikert = scale === 'likert'
+  const a = card.ai_vs_human
+  const warnings = card.gate.warnings || []
+  return (
+    <Card className={cn('flex flex-col', primary && 'ring-2 ring-primary/30')}>
+      <CardContent className="flex flex-1 flex-col gap-3 py-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <Bot className="h-4 w-4 text-muted-foreground" />
-            <span className="font-semibold capitalize">{card.label.replace('AI · ', '')}</span>
-            {card.judge_key === 'custom' && (
+            <span className="font-semibold">AI {card.label.toLowerCase()} vs human {card.label.toLowerCase()}</span>
+            {card.key === 'custom' && (
               <span className="inline-flex items-center rounded-full bg-violet-500 px-2.5 py-1 text-xs font-semibold text-white">Custom</span>
             )}
             {primary && <Badge variant="secondary" className="text-[10px]">primary</Badge>}
           </div>
-          <GateBadge verdict={card.gate.verdict} />
+          <GateBadge verdict={card.gate.verdict} hint={nextStep(card)} />
         </div>
+
+        {/* 1. Do humans agree on the rubric? (always shown first) */}
+        <HumanAgreementStrip h={card.human} />
+
+        {/* 2. Does the AI agree with the panel? */}
         <p className="text-xs text-muted-foreground">{card.gate.reason}</p>
 
-        {insufficient ? (
+        {!card.has_ai_judge ? (
           <div className="rounded-lg border border-dashed bg-muted/30 px-3 py-4 text-center text-sm text-muted-foreground">
-            {card.n} of the human-graded items overlap this judge. Grade more to unlock its scorecard.
+            No AI judge is configured for this dimension — reviewers scored it, but there's no judge to validate.
           </div>
-        ) : isLikert ? (
-          <>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-              <Metric big label="Spearman ρ" value={fmt(card.spearman)} sub={ciText(card.spearman_ci)}
-                hint="Rank correlation between judge and human scores. 1 = identical ordering." />
-              <Metric label="QWK" value={fmt(card.qwk)}
-                hint="Quadratic weighted kappa — the standard ordinal-agreement metric for graded scoring." />
-              <Metric label="MAE" value={fmt(card.mae)}
-                hint="Mean absolute error between judge and human scores (points on the 1–5 scale)." />
-              <Metric label="RMSE" value={fmt(card.rmse)} hint="Root-mean-square error — penalizes large misses more than MAE." />
-              <Metric label="Judge mean" value={fmt(card.judge_mean)} hint="Average score this judge gave." />
-              <Metric label="Human mean" value={fmt(card.human_mean)} hint="Average score the human panel gave on the same items." />
-            </div>
-            <Bias bias={card.bias} scale={scale} />
-          </>
-        ) : (
-          <>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              <Metric big label="F1" value={fmt(card.f1)} sub={ciText(card.f1_ci)}
-                hint="Harmonic mean of precision and recall. Balances false positives and false negatives." />
-              <Metric label="Cohen's κ" value={fmt(card.cohen_kappa)}
-                hint="Chance-corrected agreement with the human panel. ≥0.6 substantial, ≥0.8 near-perfect." />
-              <Metric label="MCC" value={fmt(card.mcc)}
-                hint="Matthews correlation — robust to class imbalance. −1 to +1; >0.5 is strong." />
-              <Metric label="Balanced acc." value={fmt(card.balanced_accuracy)}
-                hint="Average of recall and specificity — fair when pass/fail rates are skewed." />
-              <Metric label="Precision" value={fmt(card.precision)} hint="Of items the judge passed, how many humans also passed." />
-              <Metric label="Recall" value={fmt(card.recall)} hint="Of items humans passed, how many the judge also passed." />
-              <Metric label="Specificity" value={fmt(card.specificity)} hint="Of items humans failed, how many the judge also failed." />
-              <Metric label="Accuracy" value={fmt(card.accuracy)} hint="Overall share of items where judge and human panel agree." />
-            </div>
-            <div className="grid gap-2 sm:grid-cols-[1fr_auto] sm:items-center">
-              {card.confusion && <Confusion c={card.confusion} />}
-              <div className="sm:pl-2"><Bias bias={card.bias} scale={scale} /></div>
-            </div>
-          </>
+        ) : !a || card.n_gold === 0 ? (
+          <div className="rounded-lg border border-dashed bg-muted/30 px-3 py-4 text-center text-sm text-muted-foreground">
+            No overlapping human + AI labels yet. Grade this dimension to unlock its scorecard.
+          </div>
+        ) : isLikert ? <AiVsHumanLikert a={a} /> : <AiVsHumanBinary a={a} />}
+
+        {warnings.length > 0 && (
+          <ul className="space-y-1">
+            {warnings.map((w, i) => (
+              <li key={i} className="flex items-start gap-1.5 rounded-md bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-800">
+                <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />{w}
+              </li>
+            ))}
+          </ul>
         )}
-        <div className="text-[11px] text-muted-foreground">Scored on {card.n} human-graded item(s).</div>
+
+        {a && <AdjudicationStrip card={card} isLikert={isLikert} />}
+
+        <div className="mt-auto text-[11px] text-muted-foreground">
+          Scored on {a?.n ?? card.n_gold} human-graded item(s).
+        </div>
       </CardContent>
     </Card>
   )
@@ -185,26 +313,24 @@ function JudgeCard({ card, scale, primary }: { card: JudgeScorecard; scale: stri
 function Overview({ m }: { m: Metrics }) {
   const cov = m.answer_key_coverage
   const tiles = [
-    { icon: ScaleIcon, label: 'Panel agreement (α)', value: fmt(m.alpha_all), sub: ciText(m.alpha_all_ci) || `${m.n_judges + m.n_reviewers} raters`,
-      hint: "Krippendorff's α across all raters (judges + humans). Measures how consistently everyone scores the same items. 1 = perfect, ≥0.8 strong." },
-    { icon: Users, label: 'Reviewers · α', value: `${m.n_reviewers}`, sub: m.alpha_humans != null ? `humans α ${fmt(m.alpha_humans)}` : 'need ≥2 to compare',
-      hint: 'Number of human reviewers, and their inter-rater agreement (α) with each other. Low human α means the task itself is subjective.' },
-    { icon: Bot, label: 'AI judges', value: `${m.n_judges}`, sub: m.judges.map(j => j.label.replace('AI · ', '')).join(', ') || 'none',
-      hint: 'How many LLM judges ran. Each is scored against the human panel in its own card below.' },
-    { icon: Key, label: 'Gold-labeled', value: `${m.n_gold}`, sub: 'items with human verdicts',
-      hint: 'Items graded by at least one human — the ground truth judges are measured against. More gold = more reliable metrics.' },
+    { icon: Layers, label: 'Dimensions', value: `${m.n_dimensions}`, sub: m.dimensions.map(d => d.label).join(', ') || 'none',
+      hint: 'Each enabled AI judge is validated against the human panel for the SAME dimension — never against a single generic verdict.' },
+    { icon: Users, label: 'Reviewers', value: `${m.n_reviewers}`, sub: m.panel_agreement_computable ? 'panel agreement measurable' : 'need ≥2 for panel agreement',
+      hint: 'Human reviewers. With ≥2 we can measure whether they agree on each rubric (shown per dimension). A single reviewer can’t produce a panel-agreement statistic.' },
+    { icon: Bot, label: 'Responses', value: `${m.n_responses}`, sub: `${m.n_items} questions`,
+      hint: 'Generated answers under evaluation, across all questions.' },
     { icon: Key, label: 'Answer-key coverage', value: cov.total ? `${Math.round((cov.with_key / cov.total) * 100)}%` : '—', sub: `${cov.with_key}/${cov.total} items`,
-      hint: 'Share of questions that have an expected answer. Correctness judging and answer-key verification only apply to these.' },
+      hint: 'Share of questions with an expected answer. Correctness judging applies to these.' },
   ]
   return (
-    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       {tiles.map(t => (
         <Card key={t.label}><CardContent className="py-4">
           <div className="flex items-center gap-1.5 text-xs uppercase tracking-wide text-muted-foreground">
             <t.icon className="h-3.5 w-3.5" /> {t.label} <Tip text={t.hint} />
           </div>
           <div className="mt-1 text-2xl font-semibold tabular-nums">{t.value}</div>
-          <div className="text-xs text-muted-foreground">{t.sub}</div>
+          <div className="truncate text-xs text-muted-foreground" title={t.sub}>{t.sub}</div>
         </CardContent></Card>
       ))}
     </div>
@@ -213,34 +339,29 @@ function Overview({ m }: { m: Metrics }) {
 
 function SummaryPanel({ id }: { id: string }) {
   const [text, setText] = useState<string | null>(null)
+  const [note, setNote] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
-  const [collapsed, setCollapsed] = useState(false)
+  const [open, setOpen] = useState(true)   // expanded by default once a summary exists
   const generate = async () => {
-    setLoading(true); setErr(null)
+    setLoading(true); setErr(null); setNote(null)
     try {
       const r = await api.resultsSummary(id)
-      if (r.summary) { setText(r.summary); setCollapsed(false) }
-      else setErr(r.detail || 'No summary returned')
+      if (r.summary) { setText(r.summary); setNote(r.fallback ? (r.note || 'Computed read (LLM unavailable).') : null); setOpen(true) }
+      else { setText(null); setErr(r.detail || 'No summary returned.') }
     } catch (e) { setErr((e as Error).message) } finally { setLoading(false) }
   }
-  const toggle = () => setCollapsed(c => !c)
   return (
     <Card className="border-primary/30 bg-accent/40">
       <CardContent className="py-4">
-        <div className="flex items-center justify-between gap-2">
-          <button type="button" onClick={text ? toggle : undefined} disabled={!text}
-            className={cn('flex items-center gap-2 font-semibold', text && 'cursor-pointer hover:opacity-80')}
-            aria-expanded={text ? !collapsed : undefined}>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2 font-semibold">
             <Sparkles className="h-4 w-4 text-primary" /> AI summary
-            {text && (collapsed
-              ? <ChevronDown className="h-4 w-4 text-muted-foreground" />
-              : <ChevronUp className="h-4 w-4 text-muted-foreground" />)}
-          </button>
+          </div>
           <div className="flex items-center gap-2">
             {text && (
-              <Button size="sm" variant="ghost" onClick={toggle}>
-                {collapsed ? <><ChevronDown className="h-4 w-4" /> Show</> : <><ChevronUp className="h-4 w-4" /> Hide</>}
+              <Button size="sm" variant="ghost" onClick={() => setOpen(o => !o)} aria-expanded={open}>
+                {open ? <><ChevronUp className="h-4 w-4" /> Hide</> : <><ChevronDown className="h-4 w-4" /> Show</>}
               </Button>
             )}
             <Button size="sm" variant={text ? 'outline' : 'default'} onClick={generate} disabled={loading}>
@@ -249,14 +370,26 @@ function SummaryPanel({ id }: { id: string }) {
             </Button>
           </div>
         </div>
-        {err && <p className="mt-2 text-sm text-destructive">{err}</p>}
-        {text ? (
-          collapsed
-            ? <button type="button" onClick={toggle} className="mt-2 text-xs text-primary hover:underline">Summary hidden — click to expand ▾</button>
-            : <div className="mt-3"><Markdown>{text}</Markdown></div>
-        ) : !err && (
+
+        {err && (
+          <div className="mt-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {err}
+          </div>
+        )}
+        {text && open && (
+          <div className="mt-3">
+            {note && <p className="mb-2 text-[11px] italic text-muted-foreground">{note}</p>}
+            <Markdown>{text}</Markdown>
+          </div>
+        )}
+        {text && !open && (
+          <button type="button" onClick={() => setOpen(true)} className="mt-2 text-xs text-primary hover:underline">
+            Summary hidden — click Show to expand.
+          </button>
+        )}
+        {!text && !err && (
           <p className="mt-2 text-sm text-muted-foreground">
-            Get a plain-English read of whether your judges can be trusted, where they're biased, and what to do next.
+            Get a plain-English, per-dimension read of whether your judges can be trusted, where they're biased, and what to do next.
           </p>
         )}
       </CardContent>
@@ -270,47 +403,44 @@ export default function Results() {
   const [items, setItems] = useState<Item[]>([])
   const [members, setMembers] = useState<User[]>([])
   const [metrics, setMetrics] = useState<Metrics | null>(null)
-  const [filter, setFilter] = useState<'all' | 'disagree' | 'fail'>('all')
+  const [audits, setAudits] = useState<Record<string, DisagreementAudit>>({})
+  const [dimTab, setDimTab] = useState<string>('')
+  const [filter, setFilter] = useState<'all' | 'disagree'>('all')
 
-  useEffect(() => {
+  const reload = () => {
     api.getProject(id).then(setProject).catch(() => {})
     api.listItems(id).then(setItems).catch(() => {})
     api.listMembers(id).then(setMembers).catch(() => {})
     api.getMetrics(id).then(setMetrics).catch(() => {})
-  }, [id])
+    api.listDisagreements(id).then(setAudits).catch(() => {})
+  }
+  useEffect(reload, [id])
 
   const isLikert = project?.scale === 'likert'
   const emailOf = useMemo(() => Object.fromEntries(members.map(m => [m.id, m.email])), [members])
+  const dims = metrics?.dimensions ?? []
+  const primaryDim = metrics?.primary_dimension ?? null
+  const activeDim = dimTab || primaryDim || dims[0]?.key || ''
 
-  const judgeKeys = useMemo(() => {
-    const s = new Set<string>()
-    for (const it of items) for (const r of it.responses) for (const j of r.judgments)
-      if (j.kind === 'llm' && j.judge_key) s.add(j.judge_key)
-    return [...s]
-  }, [items])
-
-  const reviewerIds = useMemo(() => {
-    const s = new Set<string>()
-    for (const it of items) for (const r of it.responses) for (const j of r.judgments)
-      if (j.kind === 'human' && j.rater_id && (j.verdict || j.score != null)) s.add(j.rater_id)
-    return [...s]
-  }, [items])
-
+  // Per-item diagnostics for the ACTIVE dimension: human panel vs AI, with a disagreement audit.
   const rows = useMemo(() => items.map(it => {
     const r = it.responses[0]
     const js = r?.judgments ?? []
-    const byJudge: Record<string, { v?: V; s?: number }> = {}
-    for (const k of judgeKeys) { const j = js.find(x => x.kind === 'llm' && x.judge_key === k); byJudge[k] = { v: j?.verdict as V, s: j?.score ?? undefined } }
-    const byReviewer: Record<string, { v?: V; s?: number }> = {}
-    for (const rid of reviewerIds) { const j = js.find(x => x.kind === 'human' && x.rater_id === rid); byReviewer[rid] = { v: j?.verdict as V, s: j?.score ?? undefined } }
-    const primaryKey = judgeKeys.includes('correctness') ? 'correctness' : judgeKeys[0]
-    const ai = primaryKey ? byJudge[primaryKey]?.v : undefined
-    const human = majority(reviewerIds.map(rid => byReviewer[rid]?.v))
-    return { it, r, byJudge, byReviewer, ai, human, disagree: !!(ai && human && ai !== human) }
-  }), [items, judgeKeys, reviewerIds])
+    const humanMatch = (jk?: string) => jk === activeDim || (!jk && activeDim === primaryDim)
+    const humanVs = js.filter(j => j.kind === 'human' && humanMatch(j.judge_key) && (j.verdict || j.score != null))
+    const panelBin = majority(humanVs.map(j => j.verdict as V))
+    const panelMean = humanVs.length ? humanVs.reduce((s, j) => s + (j.score ?? (j.verdict === 'pass' ? 5 : 1)), 0) / humanVs.length : undefined
+    const aiJ = js.find(j => j.kind === 'llm' && j.judge_key === activeDim)
+    const ai = aiJ?.verdict as V
+    const aiScore = aiJ?.score ?? undefined
+    const disagree = isLikert
+      ? panelMean != null && aiScore != null && Math.abs(panelMean - aiScore) >= 2
+      : !!(ai && panelBin && ai !== panelBin)
+    return { it, r, humanVs, panelBin, panelMean, ai, aiScore, aiRationale: aiJ?.rationale, disagree }
+  }), [items, activeDim, primaryDim, isLikert])
 
-  const labelFor = (rid: string) => (emailOf[rid] || 'reviewer').split('@')[0]
-  const shown = rows.filter(x => filter === 'all' ? true : filter === 'disagree' ? x.disagree : (x.human === 'fail' || x.ai === 'fail'))
+  const shown = rows.filter(x => filter === 'all' ? true : x.disagree)
+  const labelFor = (rid?: string) => (rid && emailOf[rid] || 'reviewer').split('@')[0]
 
   const [evalBusy, setEvalBusy] = useState(false)
   const runMlflowEval = async () => {
@@ -323,6 +453,31 @@ export default function Results() {
     finally { setEvalBusy(false) }
   }
 
+  async function audit(responseId: string, category: DisagreementCategory) {
+    const kk = `${responseId}:${activeDim}`
+    setAudits(a => ({ ...a, [kk]: { ...a[kk], category } }))  // optimistic
+    try {
+      await api.classifyDisagreement(responseId, { judge_key: activeDim, category })
+      toast.success(`Marked: ${DISAGREEMENT_CATS.find(c => c[0] === category)?.[1] ?? category}`)
+      api.getMetrics(id).then(setMetrics).catch(() => {})  // refresh per-dimension audited count
+    } catch (e) { toast.error((e as Error).message) }
+  }
+
+  // Audit progress for the active dimension — makes the classification visibly add up to
+  // something (e.g. "how many disagreements are actually bad gold labels vs AI errors").
+  const auditSummary = useMemo(() => {
+    const counts: Record<string, number> = {}
+    const suffix = `:${activeDim}`
+    for (const [k, v] of Object.entries(audits)) {
+      if (k.endsWith(suffix) && v?.category) counts[v.category] = (counts[v.category] || 0) + 1
+    }
+    return counts
+  }, [audits, activeDim])
+  const totalDisagree = rows.filter(x => x.disagree).length
+  const totalAudited = Object.values(auditSummary).reduce((s, n) => s + n, 0)
+
+  const anySmall = dims.some(d => d.small_sample && d.has_ai_judge)
+
   return (
     <div className="space-y-6">
       <div>
@@ -330,7 +485,7 @@ export default function Results() {
         <div className="flex flex-wrap items-center gap-2">
           <h1 className="text-2xl font-semibold tracking-tight">Results</h1>
           {project && <Badge variant="secondary">{isLikert ? 'Likert (1–5)' : 'Binary'}</Badge>}
-          <span className="text-sm text-muted-foreground">— how well your AI judges match the human panel</span>
+          <span className="text-sm text-muted-foreground">— each AI judge vs the human panel, per dimension</span>
           <div className="ml-auto flex items-center gap-3">
             {project && (
               <Button size="sm" variant="outline" onClick={runMlflowEval} disabled={evalBusy}
@@ -341,7 +496,7 @@ export default function Results() {
             {project?.experiment_url && (
               <a href={project.experiment_url} target="_blank" rel="noreferrer"
                 className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
-                title="Every AI judge and human verdict is logged as an assessment on each response's MLflow trace">
+                title="Open the project's MLflow experiment — traces and the Evaluations tab">
                 <ExternalLink className="h-3.5 w-3.5" /> Validate in MLflow
               </a>
             )}
@@ -353,70 +508,115 @@ export default function Results() {
 
       {metrics && <Overview m={metrics} />}
 
-      {metrics?.small_sample && (
+      {anySmall && (
         <Card className="border-amber-300 bg-amber-50">
           <CardContent className="flex items-center gap-2 py-3 text-sm text-amber-800">
             <AlertTriangle className="h-4 w-4 shrink-0" />
-            Small sample — metrics below are noisy. Treat the confidence intervals seriously and grade more items before trusting a verdict.
+            Small sample on one or more dimensions — metrics are noisy. Weight the confidence intervals, and expand the eval set with clear passes, clear failures, and borderline cases before trusting a verdict.
           </CardContent>
         </Card>
       )}
 
-      {/* Per-judge trust scorecards */}
-      {metrics && metrics.judges.length > 0 ? (
+      {/* Per-dimension trust scorecards */}
+      {dims.length > 0 ? (
         <div className="grid gap-4 lg:grid-cols-2">
-          {metrics.judges.map(card => (
-            <JudgeCard key={card.judge_key} card={card} scale={metrics.scale}
-              primary={card.judge_key === metrics.primary_judge} />
+          {dims.map(card => (
+            <DimensionCard key={card.key} card={card} scale={metrics!.scale} primary={card.key === primaryDim} />
           ))}
         </div>
       ) : metrics && (
         <Card><CardContent className="py-8 text-center text-sm text-muted-foreground">
           {metrics.n_reviewers === 0
             ? 'No human reviews yet — judges can’t be validated until reviewers grade a sample.'
-            : 'No AI judge results yet. Run the judges from the project page to score them against the panel.'}
+            : 'No judges configured yet. Build AI judges on the project page, then grade.'}
         </CardContent></Card>
       )}
 
-      {/* Per-item detail */}
-      <div>
-        <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">Per-item detail</h2>
-        <Tabs value={filter} onValueChange={v => setFilter(v as typeof filter)}>
-          <TabsList>
-            <TabsTrigger value="all">All ({rows.length})</TabsTrigger>
-            <TabsTrigger value="disagree">Disagreements ({rows.filter(x => x.disagree).length})</TabsTrigger>
-            <TabsTrigger value="fail">{isLikert ? 'Low scores' : 'Failures'}</TabsTrigger>
-          </TabsList>
-        </Tabs>
-      </div>
+      {/* Per-item diagnostics + gold-label audit, for one dimension at a time */}
+      {dims.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Per-item diagnostics & gold-label audit</h2>
+            <Tabs value={filter} onValueChange={v => setFilter(v as typeof filter)}>
+              <TabsList>
+                <TabsTrigger value="all">All ({rows.length})</TabsTrigger>
+                <TabsTrigger value="disagree">Disagreements ({rows.filter(x => x.disagree).length})</TabsTrigger>
+              </TabsList>
+            </Tabs>
+          </div>
+          <Tabs value={activeDim} onValueChange={setDimTab}>
+            <TabsList>
+              {dims.map(d => <TabsTrigger key={d.key} value={d.key}>{d.label}</TabsTrigger>)}
+            </TabsList>
+          </Tabs>
+          <p className="text-xs text-muted-foreground">
+            Showing the <span className="font-medium">{dims.find(d => d.key === activeDim)?.label}</span> dimension.
+            Classify each AI/human disagreement so you don't assume every mismatch is an AI error — verify the gold label and question first.
+            Marking one as <span className="font-medium">“Human label incorrect”</span> or <span className="font-medium">“Ambiguous”</span> tells you to fix the answer key/rubric, not the judge.
+          </p>
 
-      <Card className="overflow-x-auto">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Question</TableHead>
-              <TableHead>Expected</TableHead>
-              <TableHead>Response</TableHead>
-              {judgeKeys.map(k => <TableHead key={k} className="text-center">AI · {k}</TableHead>)}
-              {reviewerIds.map(rid => <TableHead key={rid} className="text-center">{labelFor(rid)}</TableHead>)}
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {shown.map(({ it, r, byJudge, byReviewer, disagree }) => (
-              <TableRow key={it.id} className={disagree ? 'bg-amber-50' : ''}>
-                <TableCell className="max-w-[14rem] truncate" title={it.question}>{it.question}</TableCell>
-                <TableCell className="max-w-[10rem] truncate text-success" title={it.expected_answer || ''}>{it.expected_answer || '—'}</TableCell>
-                <TableCell className="max-w-[16rem] truncate text-muted-foreground" title={r?.response_text}>{r?.response_text || '—'}</TableCell>
-                {judgeKeys.map(k => <TableCell key={k} className="text-center"><VerdictCell v={byJudge[k]?.v} s={byJudge[k]?.s} /></TableCell>)}
-                {reviewerIds.map(rid => <TableCell key={rid} className="text-center"><VerdictCell v={byReviewer[rid]?.v} s={byReviewer[rid]?.s} /></TableCell>)}
-              </TableRow>
-            ))}
-            {shown.length === 0 && (
-              <TableRow><TableCell colSpan={3 + judgeKeys.length + reviewerIds.length} className="py-10 text-center text-muted-foreground">No rows</TableCell></TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </Card>
+          {totalDisagree > 0 && (
+            <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-xs">
+              <span className="font-medium">{totalAudited} of {totalDisagree} disagreements classified</span>
+              {Object.entries(auditSummary).map(([cat, n]) => (
+                <span key={cat} className="rounded-full bg-background px-2 py-0.5 text-muted-foreground">
+                  {DISAGREEMENT_CATS.find(c => c[0] === cat)?.[1] ?? cat}: <span className="font-semibold tabular-nums">{n}</span>
+                </span>
+              ))}
+              {totalAudited === 0 && <span className="text-muted-foreground">— use the “Disagreement cause” dropdown on each amber row to log why they differ.</span>}
+            </div>
+          )}
+
+          <Card className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Question</TableHead>
+                  <TableHead>Expected</TableHead>
+                  <TableHead>Response</TableHead>
+                  <TableHead className="text-center">Human panel</TableHead>
+                  <TableHead className="text-center">AI judge</TableHead>
+                  <TableHead>AI rationale</TableHead>
+                  <TableHead>Disagreement cause</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {shown.map(({ it, r, humanVs, panelBin, panelMean, ai, aiScore, aiRationale, disagree }) => (
+                  <TableRow key={it.id} className={disagree ? 'bg-amber-50' : ''}>
+                    <TableCell className="max-w-[12rem] truncate" title={it.question}>{it.question}</TableCell>
+                    <TableCell className="max-w-[9rem] truncate text-success" title={it.expected_answer || ''}>{it.expected_answer || '—'}</TableCell>
+                    <TableCell className="max-w-[14rem] truncate text-muted-foreground" title={r?.response_text}>{r?.response_text || '—'}</TableCell>
+                    <TableCell className="text-center" title={humanVs.map(j => `${labelFor(j.rater_id)}: ${j.score ?? j.verdict ?? '—'}`).join('\n')}>
+                      <VerdictCell v={panelBin} s={isLikert ? (panelMean != null ? Math.round(panelMean) : undefined) : undefined} />
+                      {humanVs.length > 1 && <div className="text-[10px] text-muted-foreground">{humanVs.length} reviewers</div>}
+                    </TableCell>
+                    <TableCell className="text-center"><VerdictCell v={ai} s={aiScore} /></TableCell>
+                    <TableCell className="max-w-[12rem] truncate text-muted-foreground" title={aiRationale || ''}>{aiRationale || '—'}</TableCell>
+                    <TableCell>
+                      {disagree ? (
+                        <div className="flex items-center gap-1">
+                          <select
+                            className={cn('w-full rounded-md border bg-background px-2 py-1 text-xs',
+                              audits[`${r?.id}:${activeDim}`]?.category ? 'border-primary/50' : 'border-amber-400')}
+                            value={audits[`${r?.id}:${activeDim}`]?.category ?? ''}
+                            onChange={e => e.target.value && audit(r!.id, e.target.value as DisagreementCategory)}>
+                            <option value="">Classify…</option>
+                            {DISAGREEMENT_CATS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                          </select>
+                          {audits[`${r?.id}:${activeDim}`]?.category && <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success" />}
+                        </div>
+                      ) : <span className="text-[11px] text-muted-foreground">agree</span>}
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {shown.length === 0 && (
+                  <TableRow><TableCell colSpan={7} className="py-10 text-center text-muted-foreground">No rows</TableCell></TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </Card>
+        </div>
+      )}
     </div>
   )
 }

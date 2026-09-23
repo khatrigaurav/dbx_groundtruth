@@ -22,18 +22,23 @@ logger = logging.getLogger(__name__)
 
 _SYSTEM = (
     "You are an eval analyst helping a facilitator interpret the results of validating LLM "
-    "judges against a human review panel. The human panel is the ground truth; when an answer "
-    "key exists, correctness is graded against it. Write for a technical but time-poor reader.\n\n"
-    "Return GitHub-flavored Markdown, ~150-220 words, in this shape:\n"
-    "1. **Bottom line** — one sentence: can the judge(s) be trusted to run without a human, "
-    "trusted with spot-checks, or not yet?\n"
-    "2. **Per-judge read** — a short bullet per judge citing its key numbers (F1/κ or "
-    "Spearman/QWK) and its trust gate.\n"
-    "3. **Watch-outs** — bias (lenient/harsh), low agreement, or thin data. Be explicit when the "
-    "sample is too small to conclude.\n"
+    "judges against a human review panel. Each judge is validated against the human panel for the "
+    "SAME dimension (AI correctness vs human correctness, AI safety vs human safety, etc.) — never "
+    "against a generic overall verdict. For each dimension the data gives, in order: (a) whether "
+    "reviewers agree on the rubric (inter-reviewer α), (b) whether the AI agrees with the panel "
+    "(class-balanced metrics), (c) the judge's calibration (lenient/harsh), and (d) a readiness "
+    "gate. Write for a technical but time-poor reader.\n\n"
+    "Return GitHub-flavored Markdown, ~160-230 words, in this shape:\n"
+    "1. **Bottom line** — one sentence per-dimension trust verdict where it differs.\n"
+    "2. **Per-dimension read** — a short bullet per dimension: reviewer agreement FIRST (call out "
+    "low/ambiguous rubrics), then AI-vs-panel numbers (balanced accuracy/MCC/κ or Spearman/QWK), "
+    "and the gate.\n"
+    "3. **Watch-outs** — calibration bias, single-class judges (all-pass/all-fail), class "
+    "imbalance, thin samples. When reviewer agreement is low, do NOT blame the judge — flag the "
+    "rubric. Never present high accuracy under heavy imbalance as strong.\n"
     "4. **Next step** — one concrete recommendation.\n\n"
-    "Ground every claim in the numbers provided. Never invent metrics. If there are no human "
-    "reviews yet, say the judges can't be validated until humans grade a sample."
+    "Ground every claim in the numbers provided. Never invent metrics. If a dimension has no human "
+    "reviews yet, say it can't be validated until humans grade a sample."
 )
 
 _MAX_EXAMPLES = 6
@@ -43,20 +48,22 @@ def _default_model() -> str:
     return os.environ.get("SERVING_ENDPOINT", "databricks-claude-sonnet-5")
 
 
-def _disagreement_examples(db: Session, project_id: str, primary_judge: str | None) -> list[dict]:
-    """A few items where the primary judge and the human panel disagree — the most useful
-    evidence for a human read. Best-effort; empty if nothing qualifies."""
-    if not primary_judge:
+def _disagreement_examples(db: Session, project_id: str, dimension: str | None) -> list[dict]:
+    """A few items where the AI judge and the human panel disagree ON THE PRIMARY DIMENSION —
+    the most useful evidence for a human read. Best-effort; empty if nothing qualifies."""
+    if not dimension:
         return []
     items = db.query(Item).filter(Item.project_id == project_id).all()
     out: list[dict] = []
     for it in items:
         for r in it.responses:
+            # Human verdicts for this dimension (legacy null-dimension rows count toward primary).
             humans = [1 if j.verdict and j.verdict.value == "pass" else 0
                       for j in r.judgments
-                      if j.kind == JudgmentKind.HUMAN and j.verdict is not None]
+                      if j.kind == JudgmentKind.HUMAN and j.verdict is not None
+                      and (j.judge_key == dimension or j.judge_key is None)]
             judge = next((j for j in r.judgments
-                          if j.kind == JudgmentKind.LLM and j.judge_key == primary_judge
+                          if j.kind == JudgmentKind.LLM and j.judge_key == dimension
                           and j.verdict is not None), None)
             if not humans or judge is None:
                 continue
@@ -64,6 +71,7 @@ def _disagreement_examples(db: Session, project_id: str, primary_judge: str | No
             judge_pass = judge.verdict.value == "pass"
             if human_pass != judge_pass:
                 out.append({
+                    "dimension": dimension,
                     "question": it.question[:200],
                     "expected_answer": (it.expected_answer or "")[:200],
                     "response": (r.response_text or "")[:200],
@@ -76,35 +84,90 @@ def _disagreement_examples(db: Session, project_id: str, primary_judge: str | No
     return out
 
 
+_GATE_WORD = {"pass": "trusted", "review": "spot-check only", "fail": "NOT ready",
+              "insufficient": "needs more data"}
+
+
+def _fallback_summary(project_name: str, metrics: dict) -> str:
+    """A deterministic, no-LLM read of the metrics, used when the serving model is unavailable so
+    the panel always shows something useful. Mirrors the LLM prompt's structure."""
+    dims = metrics.get("dimensions") or []
+    if not dims:
+        return ("_No dimensions to summarize yet._ Configure AI judges and have reviewers grade a "
+                "sample, then regenerate.")
+    def _f(x):
+        return "n/a" if x is None else x
+
+    lines = [f"**Bottom line.** Per-dimension verdicts for **{project_name}**:"]
+    watch: list[str] = []
+    worst = "pass"
+    order = {"pass": 0, "review": 1, "insufficient": 2, "fail": 3}
+    for d in dims:
+        g = (d.get("gate") or {}).get("verdict", "insufficient")
+        if order.get(g, 2) > order.get(worst, 0):
+            worst = g
+    lines.append("")
+    lines.append("**Per-dimension read.**")
+    for d in dims:
+        h = d.get("human") or {}
+        a = d.get("ai_vs_human") or {}
+        g = d.get("gate") or {}
+        agree = (f"reviewer agreement {h.get('level')} (α {_f(h.get('alpha'))})"
+                 if h.get("computable") else "single reviewer — panel agreement not measurable")
+        if a and "balanced_accuracy" in a:
+            nums = (f"balanced acc {_f(a.get('balanced_accuracy'))}, MCC {_f(a.get('mcc'))}, "
+                    f"κ {_f(a.get('cohen_kappa'))}, specificity {_f(a.get('specificity'))}")
+        elif a:
+            nums = f"Spearman ρ {_f(a.get('spearman'))}, QWK {_f(a.get('qwk'))}, MAE {_f(a.get('mae'))}"
+        else:
+            nums = "no AI-vs-human overlap yet"
+        lines.append(f"- **{d.get('label')}** — {agree}; {nums} → **{_GATE_WORD.get(g.get('verdict'), g.get('verdict'))}**. {g.get('reason', '')}")
+        for w in (g.get("warnings") or []):
+            watch.append(f"{d.get('label')}: {w}")
+    if watch:
+        lines.append("")
+        lines.append("**Watch-outs.**")
+        lines += [f"- {w}" for w in watch]
+    lines.append("")
+    nxt = {
+        "fail": "At least one judge isn't ready — inspect its disagreements below, tighten the judge's rubric, and re-grade (or fix ambiguous gold labels).",
+        "insufficient": "Collect more human-reviewed items (aim for ≥15 per dimension, with both pass and fail examples), then regenerate.",
+        "review": "Usable with human spot-checks — audit the disagreements below before trusting any judge unattended.",
+        "pass": "Judges look trustworthy; keep periodic spot-checks.",
+    }[worst]
+    lines.append(f"**Next step.** {nxt}")
+    return "\n".join(lines)
+
+
 def summarize_results(db: Session, project_id: str, model: str | None = None) -> dict:
     project = db.query(Project).filter(Project.id == project_id).first()
     if project is None:
         return {"detail": "Project not found."}
 
     metrics = METRICS.project_metrics(db, project_id)
-    examples = _disagreement_examples(db, project_id, metrics.get("primary_judge"))
+    primary = metrics.get("primary_dimension")
+    examples = _disagreement_examples(db, project_id, primary)
 
+    dims = metrics.get("dimensions") or []
+    primary_card = next((d for d in dims if d.get("key") == primary), None)
     payload = {
         "project_name": project.name,
         "scale": metrics.get("scale"),
         "counts": {
             "items": metrics.get("n_items"),
             "responses": metrics.get("n_responses"),
-            "gold_labeled": metrics.get("n_gold"),
             "reviewers": metrics.get("n_reviewers"),
-            "judges": metrics.get("n_judges"),
+            "dimensions": metrics.get("n_dimensions"),
             "answer_key_coverage": metrics.get("answer_key_coverage"),
-            "small_sample": metrics.get("small_sample"),
+            "panel_agreement_computable": metrics.get("panel_agreement_computable"),
         },
-        "agreement": {
-            "alpha_all": metrics.get("alpha_all"),
-            "alpha_humans": metrics.get("alpha_humans"),
-            "human_pass_rate": metrics.get("human_pass_rate"),
-            "human_mean": metrics.get("human_mean"),
-        },
-        "judges": metrics.get("judges"),
+        "primary_dimension": primary,
+        "dimensions": dims,
         "disagreement_examples": examples,
     }
+
+    n_gold = primary_card.get("n_gold") if primary_card else 0
+    small_sample = primary_card.get("small_sample") if primary_card else True
 
     model = (model or project.judge_model or _default_model()).strip()
     try:
@@ -121,10 +184,13 @@ def summarize_results(db: Session, project_id: str, model: str | None = None) ->
             ],
             max_tokens=650,
         )
-        text = resp.choices[0].message.content or ""
+        text = (resp.choices[0].message.content or "").strip()
+        if not text:
+            raise ValueError("the model returned an empty response")
+        return {"summary": text, "model": model, "n_gold": n_gold, "small_sample": small_sample}
     except Exception as e:  # noqa: BLE001
-        logger.warning("results summary generation failed: %s", e)
-        return {"detail": f"Couldn't generate a summary: {e}", "model": model}
-
-    return {"summary": text, "model": model,
-            "n_gold": metrics.get("n_gold"), "small_sample": metrics.get("small_sample")}
+        # Never leave the panel blank: fall back to a computed, no-LLM read of the same numbers.
+        logger.warning("results summary LLM generation failed (%s); using computed fallback", e)
+        return {"summary": _fallback_summary(project.name, metrics), "model": "computed (no LLM)",
+                "fallback": True, "note": f"LLM summary unavailable ({e}); showing a computed read.",
+                "n_gold": n_gold, "small_sample": small_sample}

@@ -169,9 +169,19 @@ export default function ProjectDetail() {
   function setJudgeField(key: string, field: 'instructions' | 'model', value: string) {
     setJudges(prev => ({ ...prev, [key]: { ...prev[key], judge_key: key, enabled: prev[key]?.enabled ?? true, [field]: value } }))
   }
+  // guidelines/custom judges score against a facilitator-written rubric — which reviewers ALSO
+  // see. Without it neither the AI judge nor the human panel has criteria, so require it.
+  const needsRubric = (j: ProjectJudge) =>
+    j.enabled && (j.judge_key === 'guidelines' || j.judge_key === 'custom') && !(j.instructions || '').trim()
+  const missingRubric = useMemo(() => Object.values(judges).filter(needsRubric).map(j => j.judge_key), [judges])
+
   async function saveJudges() {
     const list = Object.values(judges).filter(j => j.enabled)
     if (list.length === 0) { toast.error('Enable at least one judge'); return }
+    if (missingRubric.length) {
+      toast.error('Add a scoring rubric for your guidelines/custom judge — reviewers use it too.')
+      return
+    }
     setSavingJudges(true)
     try {
       await api.setJudgeConfig(id, list)
@@ -302,9 +312,17 @@ export default function ProjectDetail() {
                     </div>
                   </label>
                   {on && (j.is_custom || j.key === 'guidelines') && (
-                    <Textarea rows={2} className="mt-2" placeholder="Grading instructions…" disabled={judgesLocked}
-                      value={judges[j.key]?.instructions || ''}
-                      onChange={e => setJudgeField(j.key, 'instructions', e.target.value)} />
+                    <div className="mt-2 space-y-1">
+                      <Textarea rows={2}
+                        className={cn(missingRubric.includes(j.key) && !judgesLocked && 'border-amber-400 focus-visible:ring-amber-400')}
+                        placeholder="Scoring rubric — the criteria for a pass (or a high score). Reviewers see this too."
+                        disabled={judgesLocked}
+                        value={judges[j.key]?.instructions || ''}
+                        onChange={e => setJudgeField(j.key, 'instructions', e.target.value)} />
+                      {!judgesLocked && (missingRubric.includes(j.key)
+                        ? <p className="flex items-center gap-1 text-[11px] text-amber-600"><AlertTriangle className="h-3 w-3" /> Required — both the AI judge and human reviewers grade against this rubric.</p>
+                        : <p className="text-[11px] text-muted-foreground">Reviewers see this rubric while scoring, so keep it concise and criteria-focused.</p>)}
+                    </div>
                   )}
                 </div>
               )
@@ -329,13 +347,15 @@ export default function ProjectDetail() {
               ) : (
                 <>
                   <Button variant={judgesDirty ? 'default' : 'outline'} size="sm" onClick={saveJudges}
-                    disabled={savingJudges || Object.values(judges).filter(j => j.enabled).length === 0}
-                    title="Save and lock your judge config">
+                    disabled={savingJudges || missingRubric.length > 0 || Object.values(judges).filter(j => j.enabled).length === 0}
+                    title={missingRubric.length ? 'Add a scoring rubric first' : 'Save and lock your judge config'}>
                     {savingJudges
                       ? <><Loader2 className="h-4 w-4 animate-spin" /> Saving…</>
                       : <><Check className="h-4 w-4" /> Save &amp; lock</>}
                   </Button>
-                  {judgesDirty && !savingJudges && <span className="text-xs font-medium text-amber-600">Unsaved changes</span>}
+                  {missingRubric.length > 0
+                    ? <span className="text-xs font-medium text-amber-600">Add a rubric to save</span>
+                    : judgesDirty && !savingJudges && <span className="text-xs font-medium text-amber-600">Unsaved changes</span>}
                 </>
               )}
             </div>

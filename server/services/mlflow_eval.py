@@ -69,6 +69,12 @@ def run_evaluation(db: Session, project_id: str) -> dict:
     is_likert = project.scale == ProjectScale.LIKERT
     items = db.query(Item).filter(Item.project_id == project_id).all()
 
+    # Primary dimension = where legacy (null-dimension) human verdicts belong.
+    llm_keys = {j.judge_key or "judge" for it in items for r in it.responses
+                for j in r.judgments if j.kind == JudgmentKind.LLM}
+    primary = "correctness" if "correctness" in llm_keys else (
+        sorted(llm_keys)[0] if llm_keys else "overall")
+
     lookup: dict[str, dict[str, tuple]] = {}
     data: list[dict] = []
     for it in items:
@@ -76,8 +82,8 @@ def run_evaluation(db: Session, project_id: str) -> dict:
             if not r.response_text:
                 continue
             verdicts: dict[str, tuple] = {}
-            humans_bin: list[int] = []
-            humans_score: list[float] = []
+            # Human verdicts grouped by dimension, so each pairs with its AI judge in the run.
+            humans_by_dim: dict[str, list[float]] = {}
             for j in r.judgments:
                 if j.kind == JudgmentKind.LLM:
                     if is_likert and j.score is not None:
@@ -88,17 +94,19 @@ def run_evaluation(db: Session, project_id: str) -> dict:
                         continue
                     verdicts[j.judge_key or "judge"] = (value, j.rationale or "")
                 elif j.kind == JudgmentKind.HUMAN:
+                    dim = j.judge_key or primary
                     if is_likert and j.score is not None:
-                        humans_score.append(float(j.score))
+                        humans_by_dim.setdefault(dim, []).append(float(j.score))
                     elif j.verdict is not None:
-                        humans_bin.append(1 if j.verdict.value == "pass" else 0)
-            # The human panel rides along as its own "judge" so reviewers appear in the eval run
-            # next to the AI judges (majority for binary, mean for Likert).
-            if is_likert and humans_score:
-                verdicts["human_review"] = (sum(humans_score) / len(humans_score), f"{len(humans_score)} reviewer(s)")
-            elif humans_bin:
-                verdicts["human_review"] = ("pass" if sum(humans_bin) * 2 >= len(humans_bin) else "fail",
-                                            f"{len(humans_bin)} reviewer(s)")
+                        humans_by_dim.setdefault(dim, []).append(1.0 if j.verdict.value == "pass" else 0.0)
+            # The human panel rides along per dimension (majority for binary, mean for Likert) so
+            # reviewers appear next to the matching AI judge in the eval run.
+            for dim, vals in humans_by_dim.items():
+                if is_likert:
+                    verdicts[f"human_{dim}"] = (sum(vals) / len(vals), f"{len(vals)} reviewer(s)")
+                else:
+                    verdicts[f"human_{dim}"] = ("pass" if sum(vals) * 2 >= len(vals) else "fail",
+                                                f"{len(vals)} reviewer(s)")
             if not verdicts:
                 continue
             lookup[r.id] = verdicts
