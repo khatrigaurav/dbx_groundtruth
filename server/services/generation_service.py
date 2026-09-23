@@ -289,11 +289,8 @@ def _worker(project_id: str, item_ids: list[str], exp_id: str | None, mode: str,
                 detail = (detail + " " + (gr.get("detail") or "")).strip()
                 for e in (gr.get("errors") or []):
                     errs.append(e)
-                # Mirror the AI verdicts into MLflow so they're reviewable alongside the answer
-                # key on each trace (best-effort — never affects the run's outcome).
-                from server.services.mlflow_assessments import log_project_ai_judgments
-                log_project_ai_judgments(db, project_id)
-                # And log an Evaluation Run (replay of the same verdicts) for the Evaluations tab.
+                # Log an Evaluation Run (replay of the just-computed verdicts) — the single MLflow
+                # surface: it creates + scores traces atomically and fills the Evaluations tab.
                 from server.services.mlflow_eval import run_evaluation_safe
                 run_evaluation_safe(db, project_id)
             except Exception as e:  # noqa: BLE001
