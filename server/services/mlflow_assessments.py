@@ -137,6 +137,26 @@ def log_judgment_by_id(judgment_id: str) -> None:
         db.close()
 
 
+def purge_traces(experiment_id: str, trace_ids: list[str]) -> None:
+    """Best-effort delete of specific traces (used when a dataset is replaced, so the experiment
+    doesn't accumulate traces from prior dataset versions). Runs off-thread; never raises."""
+    ids = [t for t in (trace_ids or []) if t]
+    if not experiment_id or not ids:
+        return
+    try:
+        import mlflow
+
+        mlflow.set_tracking_uri("databricks")
+        for i in range(0, len(ids), 100):  # API caps trace_ids per call
+            try:
+                mlflow.delete_traces(experiment_id=experiment_id, trace_ids=ids[i:i + 100])
+            except Exception as e:  # noqa: BLE001
+                logger.warning("purge_traces chunk failed: %s", e)
+                break
+    except Exception as e:  # noqa: BLE001
+        logger.warning("purge_traces skipped for experiment %s: %s", experiment_id, e)
+
+
 def log_project_ai_judgments(db: Session, project_id: str) -> int:
     """Mirror every LLM judgment in a project to MLflow — called after a grading run.
     Best-effort; returns how many it attempted."""

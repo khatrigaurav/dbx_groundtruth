@@ -82,11 +82,22 @@ async def upload_csv(project_id: str, file: UploadFile = File(...),
     # grades, and human reviews) before importing. Done AFTER the file validated above, so a
     # malformed upload can't destroy existing data. Delete via the ORM to trigger cascades.
     replaced = 0
+    old_trace_ids: list[str] = []
     if replace:
         for existing in db.query(Item).filter(Item.project_id == project_id).all():
+            old_trace_ids += [r.mlflow_trace_id for r in existing.responses if r.mlflow_trace_id]
             db.delete(existing)
             replaced += 1
         db.flush()
+        # Best-effort: drop the replaced dataset's MLflow traces off-thread so the experiment
+        # doesn't accumulate stale rows. Never blocks or fails the upload.
+        proj = A.get_project_or_none(db, project_id)
+        if proj is not None and proj.mlflow_experiment_id and old_trace_ids:
+            import threading
+
+            from server.services.mlflow_assessments import purge_traces
+            threading.Thread(target=purge_traces,
+                             args=(proj.mlflow_experiment_id, old_trace_ids), daemon=True).start()
 
     items_created = responses_created = 0
     warnings: list[str] = []

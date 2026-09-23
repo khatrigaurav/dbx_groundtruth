@@ -35,13 +35,18 @@ def _feedback(value, rationale):
         return value
 
 
-def _make_replay_scorer(judge_key: str, lookup: dict):
-    """A scorer that returns the stored verdict for the row's response — no model call."""
+def _trace_id_of(trace) -> str | None:
+    info = getattr(trace, "info", None)
+    return getattr(info, "trace_id", None) or getattr(info, "request_id", None)
+
+
+def _make_replay_scorer(judge_key: str, by_trace: dict):
+    """A scorer that returns each *existing trace's* stored verdict — keyed by trace id, so we
+    evaluate the traces already in the experiment rather than synthesizing new ones. No model call."""
     from mlflow.genai.scorers import scorer
 
-    def fn(inputs=None, **kwargs):
-        rid = inputs.get("response_id") if isinstance(inputs, dict) else None
-        entry = lookup.get(rid, {}).get(judge_key)
+    def fn(trace=None, **kwargs):
+        entry = by_trace.get(_trace_id_of(trace), {}).get(judge_key)
         if entry is None:
             return None
         value, rationale = entry
@@ -55,8 +60,8 @@ def _make_replay_scorer(judge_key: str, lookup: dict):
 
 
 def run_evaluation(db: Session, project_id: str) -> dict:
-    """Build a dataset from the project's stored responses + verdicts and log an Evaluation Run
-    via replay scorers. Returns {detail, evaluations_url?} or {detail} with the reason."""
+    """Log an Evaluation Run by replaying stored verdicts over the project's EXISTING traces
+    (not synthesizing new ones — that previously doubled the Traces tab). Returns {detail, ...}."""
     db.expire_all()  # read committed verdicts fresh (same worker session as grading)
     project = db.query(Project).filter(Project.id == project_id).first()
     if project is None:
@@ -68,11 +73,11 @@ def run_evaluation(db: Session, project_id: str) -> dict:
     is_likert = project.scale == ProjectScale.LIKERT
     items = db.query(Item).filter(Item.project_id == project_id).all()
 
-    lookup: dict[str, dict[str, tuple]] = {}
-    data: list[dict] = []
+    # Map each response's trace to its stored verdicts.
+    by_trace: dict[str, dict[str, tuple]] = {}
     for it in items:
         for r in it.responses:
-            if not r.response_text:
+            if not r.mlflow_trace_id or not r.response_text:
                 continue
             verdicts: dict[str, tuple] = {}
             for j in r.judgments:
@@ -85,33 +90,33 @@ def run_evaluation(db: Session, project_id: str) -> dict:
                 else:
                     continue
                 verdicts[j.judge_key or "judge"] = (value, j.rationale or "")
-            if not verdicts:
-                continue
-            lookup[r.id] = verdicts
-            data.append({
-                "inputs": {"question": it.question, "response_id": r.id},
-                "outputs": r.response_text,
-                "expectations": {"expected_response": it.expected_answer or ""},
-            })
+            if verdicts:
+                by_trace[r.mlflow_trace_id] = verdicts
 
-    if not data:
-        return {"detail": "No AI-graded responses yet — grade first, then run the evaluation."}
+    if not by_trace:
+        return {"detail": "No AI-graded responses with traces yet — grade first, then evaluate."}
 
-    judge_keys = sorted({k for v in lookup.values() for k in v})
-    scorers = [_make_replay_scorer(k, lookup) for k in judge_keys]
+    judge_keys = sorted({k for v in by_trace.values() for k in v})
+    scorers = [_make_replay_scorer(k, by_trace) for k in judge_keys]
 
     import mlflow
 
     mlflow.set_tracking_uri("databricks")
     mlflow.set_experiment(experiment_id=experiment_id)
-    result = mlflow.genai.evaluate(data=data, scorers=scorers)
+    # Pull the existing traces and scope to this project's graded responses.
+    traces = mlflow.search_traces(experiment_ids=[experiment_id])
+    cols = list(getattr(traces, "columns", []))
+    tid_col = next((c for c in ("trace_id", "request_id") if c in cols), None)
+    if tid_col is not None:
+        traces = traces[traces[tid_col].isin(list(by_trace.keys()))]
+    result = mlflow.genai.evaluate(data=traces, scorers=scorers)
 
-    run_id = getattr(result, "run_id", None) or getattr(getattr(result, "run", None), "info", None)
+    run_id = getattr(result, "run_id", None)
     host = get_workspace_host().rstrip("/")
     url = f"{host}/ml/experiments/{experiment_id}" + (f"/runs/{run_id}" if isinstance(run_id, str) else "")
-    return {"detail": f"Logged an evaluation run over {len(data)} response(s) with "
+    return {"detail": f"Logged an evaluation run over {len(by_trace)} response(s) with "
                       f"{len(judge_keys)} judge(s).",
-            "evaluations_url": url, "n": len(data), "judges": judge_keys}
+            "evaluations_url": url, "n": len(by_trace), "judges": judge_keys}
 
 
 def run_evaluation_safe(db: Session, project_id: str) -> None:
