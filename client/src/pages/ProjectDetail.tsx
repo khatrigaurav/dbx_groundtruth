@@ -16,6 +16,7 @@ import { Input } from '../components/ui/input'
 import { Textarea } from '../components/ui/textarea'
 import { Badge } from '../components/ui/badge'
 import { cn } from '../lib/utils'
+import { cacheGet, cacheKey, cacheSet } from '../lib/cache'
 
 function hasHuman(js: { kind: string; verdict?: Verdict; score?: number }[]) {
   return js.some(j => j.kind === 'human' && (j.verdict || j.score != null))
@@ -35,9 +36,10 @@ function judgeSig(judges: Record<string, ProjectJudge>): string {
 export default function ProjectDetail() {
   const { id = '' } = useParams()
   const nav = useNavigate()
-  const [project, setProject] = useState<Project | null>(null)
-  const [items, setItems] = useState<Item[]>([])
-  const [members, setMembers] = useState<User[]>([])
+  // Seed from the session cache so a revisit paints instantly instead of blanking on refetch.
+  const [project, setProject] = useState<Project | null>(() => cacheGet<Project>(cacheKey('project', id)) ?? null)
+  const [items, setItems] = useState<Item[]>(() => cacheGet<Item[]>(cacheKey('items', id)) ?? [])
+  const [members, setMembers] = useState<User[]>(() => cacheGet<User[]>(cacheKey('members', id)) ?? [])
   const [catalog, setCatalog] = useState<JudgeCatalogItem[]>([])
   const [models, setModels] = useState<string[]>([])
   const [judges, setJudges] = useState<Record<string, ProjectJudge>>({})
@@ -58,6 +60,7 @@ export default function ProjectDetail() {
 
   const load = () => {
     api.getProject(id).then(p => {
+      cacheSet(cacheKey('project', id), p)
       setProject(p)
       const seed: Record<string, ProjectJudge> = {}
       for (const j of p.judges) seed[j.judge_key] = j
@@ -66,11 +69,17 @@ export default function ProjectDetail() {
       setSavedSig(judgeSig(seed))   // server state is, by definition, saved
       setJudgesLocked(p.judges.length > 0)   // existing config → locked; brand-new → open to configure
     }).catch(e => toast.error(e.message))
-    api.listItems(id).then(setItems).catch(() => {})
-    api.listMembers(id).then(setMembers).catch(() => {})
+    api.listItems(id).then(v => setItems(cacheSet(cacheKey('items', id), v))).catch(() => {})
+    api.listMembers(id).then(v => setMembers(cacheSet(cacheKey('members', id), v))).catch(() => {})
   }
   useEffect(() => { load() }, [id])
   useEffect(() => { api.judgeCatalog().then(c => { setCatalog(c.judges); setModels(c.models) }).catch(() => {}) }, [])
+  // Warm the Results cache in the background so opening Results paints instantly (metrics is the
+  // slowest call). Best-effort; failures are ignored and just mean Results loads cold.
+  useEffect(() => {
+    api.getMetrics(id).then(v => cacheSet(cacheKey('metrics', id), v)).catch(() => {})
+    api.listDisagreements(id).then(v => cacheSet(cacheKey('audits', id), v)).catch(() => {})
+  }, [id])
   // Resume the pending state if a background generation is still running (e.g. after a reload).
   useEffect(() => {
     api.generateStatus(id).then(s => { if (s.status === 'running') { setGenerating(true); pollBackground() } }).catch(() => {})

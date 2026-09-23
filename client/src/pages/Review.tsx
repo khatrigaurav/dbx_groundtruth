@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { ArrowLeft, Check, X, ChevronLeft, ChevronRight } from 'lucide-react'
 import { api, getSession, type Item, type JudgeCatalogItem, type Project, type Verdict } from '../lib/api'
+import { cacheGet, cacheKey, cacheSet } from '../lib/cache'
 import { Card, CardContent } from '../components/ui/card'
 import { Button } from '../components/ui/button'
 import { Textarea } from '../components/ui/textarea'
@@ -40,8 +41,10 @@ export default function Review() {
   const { id = '' } = useParams()
   const user = getSession()
   const isFac = user?.role === 'facilitator'  // reviewers have no project page to go back to
-  const [project, setProject] = useState<Project | null>(null)
-  const [items, setItems] = useState<Item[]>([])
+  // Seed from the session cache so a revisit (or arriving from the project page) paints instantly.
+  const [project, setProject] = useState<Project | null>(() => cacheGet<Project>(cacheKey('project', id)) ?? null)
+  const [items, setItems] = useState<Item[]>(() => cacheGet<Item[]>(cacheKey('items', id)) ?? [])
+  const [itemsLoaded, setItemsLoaded] = useState<boolean>(() => cacheGet<Item[]>(cacheKey('items', id)) !== undefined)
   const [idx, setIdx] = useState(0)
   const [rationale, setRationale] = useState('')
   const [sel, setSel] = useState<Sel>({})
@@ -55,8 +58,10 @@ export default function Review() {
   const seededSig = useRef<string>('')
   const isLikert = project?.scale === 'likert'
 
-  useEffect(() => { api.listItems(id).then(setItems).catch(() => {}) }, [id])
-  useEffect(() => { api.getProject(id).then(setProject).catch(() => {}) }, [id])
+  useEffect(() => {
+    api.listItems(id).then(v => { setItems(cacheSet(cacheKey('items', id), v)); setItemsLoaded(true) }).catch(() => setItemsLoaded(true))
+  }, [id])
+  useEffect(() => { api.getProject(id).then(v => setProject(cacheSet(cacheKey('project', id), v))).catch(() => {}) }, [id])
   useEffect(() => { api.judgeCatalog().then(c => setCatalog(c.judges)).catch(() => {}) }, [])
 
   // Dimensions = the project's enabled AI judges (1-1). Each carries the scoring rubric so the
@@ -116,10 +121,11 @@ export default function Review() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [items, user, dims, isLikert])
 
-  // Patch the reviewer's verdicts into the local items in memory, so the navigator and any
-  // return-visit reflect them instantly — no server round-trip on the scoring path.
+  // Patch the reviewer's verdicts into the local items in memory (and the shared cache), so the
+  // navigator, a return-visit, and a revisit all reflect them instantly — no server round-trip
+  // on the scoring path.
   function patchItems(responseId: string, nextSel: Sel, note: string) {
-    setItems(prev => prev.map(it => {
+    const apply = (list: Item[]): Item[] => list.map(it => {
       const r = it.responses[0]
       if (!r || r.id !== responseId) return it
       const judgments = [...r.judgments]
@@ -134,7 +140,10 @@ export default function Review() {
         if (at >= 0) judgments[at] = row; else judgments.push(row)
       }
       return { ...it, responses: [{ ...r, judgments }, ...it.responses.slice(1)] }
-    }))
+    })
+    setItems(prev => apply(prev))
+    const cached = cacheGet<Item[]>(cacheKey('items', id))
+    if (cached) cacheSet(cacheKey('items', id), apply(cached))
   }
 
   // Optimistic, non-blocking save: update local state now, persist in the background.
@@ -170,7 +179,16 @@ export default function Review() {
     return (
       <div className="mx-auto max-w-2xl">
         {isFac && <Link to={`/projects/${id}`} className="mb-4 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" /> Project</Link>}
-        <Card><CardContent className="py-12 text-center text-sm text-muted-foreground">No questions to review yet.</CardContent></Card>
+        {/* Cold load: show a skeleton instead of a misleading "no questions" flash until the fetch lands. */}
+        {!itemsLoaded ? (
+          <Card><CardContent className="space-y-3 py-6">
+            <div className="h-4 w-1/3 animate-pulse rounded bg-muted" />
+            <div className="h-20 animate-pulse rounded bg-muted" />
+            <div className="h-9 animate-pulse rounded bg-muted" />
+          </CardContent></Card>
+        ) : (
+          <Card><CardContent className="py-12 text-center text-sm text-muted-foreground">No questions to review yet.</CardContent></Card>
+        )}
       </div>
     )
   }

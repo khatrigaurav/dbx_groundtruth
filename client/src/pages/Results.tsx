@@ -18,6 +18,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Markdown } from '../components/Markdown'
 import { cn } from '../lib/utils'
+import { cacheGet, cacheKey, cacheSet } from '../lib/cache'
 
 type V = Verdict | undefined
 const majority = (vs: V[]): V => {
@@ -310,6 +311,26 @@ function DimensionCard({ card, scale, primary }: { card: DimCard; scale: string;
   )
 }
 
+// Shown while the (heavier) metrics call is in flight on a cold load, so the body isn't blank.
+function CardsSkeleton() {
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      {[0, 1].map(i => (
+        <Card key={i}><CardContent className="space-y-3 py-4">
+          <div className="flex items-center justify-between">
+            <div className="h-4 w-40 animate-pulse rounded bg-muted" />
+            <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
+          </div>
+          <div className="h-8 animate-pulse rounded bg-muted" />
+          <div className="grid grid-cols-4 gap-2">
+            {[0, 1, 2, 3].map(j => <div key={j} className="h-14 animate-pulse rounded bg-muted" />)}
+          </div>
+        </CardContent></Card>
+      ))}
+    </div>
+  )
+}
+
 function Overview({ m }: { m: Metrics }) {
   const cov = m.answer_key_coverage
   const tiles = [
@@ -399,20 +420,22 @@ function SummaryPanel({ id }: { id: string }) {
 
 export default function Results() {
   const { id = '' } = useParams()
-  const [project, setProject] = useState<Project | null>(null)
-  const [items, setItems] = useState<Item[]>([])
-  const [members, setMembers] = useState<User[]>([])
-  const [metrics, setMetrics] = useState<Metrics | null>(null)
-  const [audits, setAudits] = useState<Record<string, DisagreementAudit>>({})
+  // Seed from the session cache (warmed by the project page) so Results paints instantly.
+  const [project, setProject] = useState<Project | null>(() => cacheGet<Project>(cacheKey('project', id)) ?? null)
+  const [items, setItems] = useState<Item[]>(() => cacheGet<Item[]>(cacheKey('items', id)) ?? [])
+  const [members, setMembers] = useState<User[]>(() => cacheGet<User[]>(cacheKey('members', id)) ?? [])
+  const [metrics, setMetrics] = useState<Metrics | null>(() => cacheGet<Metrics>(cacheKey('metrics', id)) ?? null)
+  const [metricsLoaded, setMetricsLoaded] = useState<boolean>(() => cacheGet<Metrics>(cacheKey('metrics', id)) !== undefined)
+  const [audits, setAudits] = useState<Record<string, DisagreementAudit>>(() => cacheGet<Record<string, DisagreementAudit>>(cacheKey('audits', id)) ?? {})
   const [dimTab, setDimTab] = useState<string>('')
   const [filter, setFilter] = useState<'all' | 'disagree'>('all')
 
   const reload = () => {
-    api.getProject(id).then(setProject).catch(() => {})
-    api.listItems(id).then(setItems).catch(() => {})
-    api.listMembers(id).then(setMembers).catch(() => {})
-    api.getMetrics(id).then(setMetrics).catch(() => {})
-    api.listDisagreements(id).then(setAudits).catch(() => {})
+    api.getProject(id).then(v => setProject(cacheSet(cacheKey('project', id), v))).catch(() => {})
+    api.listItems(id).then(v => setItems(cacheSet(cacheKey('items', id), v))).catch(() => {})
+    api.listMembers(id).then(v => setMembers(cacheSet(cacheKey('members', id), v))).catch(() => {})
+    api.getMetrics(id).then(v => { setMetrics(cacheSet(cacheKey('metrics', id), v)); setMetricsLoaded(true) }).catch(() => setMetricsLoaded(true))
+    api.listDisagreements(id).then(v => setAudits(cacheSet(cacheKey('audits', id), v))).catch(() => {})
   }
   useEffect(reload, [id])
 
@@ -459,7 +482,7 @@ export default function Results() {
     try {
       await api.classifyDisagreement(responseId, { judge_key: activeDim, category })
       toast.success(`Marked: ${DISAGREEMENT_CATS.find(c => c[0] === category)?.[1] ?? category}`)
-      api.getMetrics(id).then(setMetrics).catch(() => {})  // refresh per-dimension audited count
+      api.getMetrics(id).then(v => setMetrics(cacheSet(cacheKey('metrics', id), v))).catch(() => {})  // refresh gate + audited count
     } catch (e) { toast.error((e as Error).message) }
   }
 
@@ -518,15 +541,17 @@ export default function Results() {
       )}
 
       {/* Per-dimension trust scorecards */}
-      {dims.length > 0 ? (
+      {!metricsLoaded && dims.length === 0 ? (
+        <CardsSkeleton />
+      ) : dims.length > 0 ? (
         <div className="grid gap-4 lg:grid-cols-2">
           {dims.map(card => (
             <DimensionCard key={card.key} card={card} scale={metrics!.scale} primary={card.key === primaryDim} />
           ))}
         </div>
-      ) : metrics && (
+      ) : (
         <Card><CardContent className="py-8 text-center text-sm text-muted-foreground">
-          {metrics.n_reviewers === 0
+          {metrics?.n_reviewers === 0
             ? 'No human reviews yet — judges can’t be validated until reviewers grade a sample.'
             : 'No judges configured yet. Build AI judges on the project page, then grade.'}
         </CardContent></Card>
