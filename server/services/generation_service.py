@@ -84,7 +84,12 @@ def background_status(db: Session, project_id: str) -> dict:
     status = run.status
     # Reap an orphaned run (worker died mid-run/mid-cancel, e.g. an app restart).
     if status in ("running", "cancelling") and run.updated_at is not None:
-        age = (_dt.datetime.now(_dt.timezone.utc) - run.updated_at).total_seconds()
+        # Lakebase reads timestamps back tz-naive; treat a naive value as UTC so the subtraction
+        # below doesn't raise "can't subtract offset-naive and offset-aware datetimes".
+        updated = run.updated_at
+        if updated.tzinfo is None:
+            updated = updated.replace(tzinfo=_dt.timezone.utc)
+        age = (_dt.datetime.now(_dt.timezone.utc) - updated).total_seconds()
         if age > _STALE_SECONDS:
             run.status = status = "error"
             run.detail = "Generation was interrupted (likely an app restart or timeout). Please run it again."
