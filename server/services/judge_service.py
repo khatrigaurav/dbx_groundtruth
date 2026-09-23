@@ -165,6 +165,11 @@ def grade_project(db: Session, project_id: str, *, progress_cb=None, cancel_chec
     progress_cb(done, total) and cancel_check() -> bool are optional hooks the background
     pipeline uses to report progress and honor a cancel; both run on this (caller's) thread.
     """
+    # Read committed state fresh. The session has expire_on_commit=False, so when grading runs
+    # in the same worker right after generation, cached Item.responses collections (loaded while
+    # empty during generation) would otherwise hide the answers that were just attached.
+    db.expire_all()
+
     project = db.query(Project).filter(Project.id == project_id).first()
     if project is None:
         return {"judged": 0, "detail": "Project not found."}
