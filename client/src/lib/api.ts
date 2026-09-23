@@ -110,8 +110,8 @@ export const api = {
     req<User>('POST', `/projects/${projectId}/members`, { email, name }),
   listMembers: (projectId: string) => req<User[]>('GET', `/projects/${projectId}/members`),
   listItems: (projectId: string) => req<Item[]>('GET', `/projects/${projectId}/items`),
-  uploadCsv: (projectId: string, file: File) => {
-    const fd = new FormData(); fd.append('file', file)
+  uploadCsv: (projectId: string, file: File, replace = false) => {
+    const fd = new FormData(); fd.append('file', file); fd.append('replace', String(replace))
     return req<{ items_created: number; responses_created: number; warnings: string[]; detail?: string }>(
       'POST', `/projects/${projectId}/intake/csv`, fd, true)
   },

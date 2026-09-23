@@ -17,7 +17,7 @@ from __future__ import annotations
 import csv
 import io
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session
 
 from server import auth_service as A
@@ -56,7 +56,8 @@ def _pick(row: dict, keys) -> str:
 
 
 @router.post("/{project_id}/intake/csv", response_model=IntakeResult)
-async def upload_csv(project_id: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def upload_csv(project_id: str, file: UploadFile = File(...),
+                     replace: bool = Form(False), db: Session = Depends(get_db)):
     if A.get_project_or_none(db, project_id) is None:
         raise HTTPException(status_code=404, detail="Project not found")
     name = (file.filename or "").lower()
@@ -76,6 +77,16 @@ async def upload_csv(project_id: str, file: UploadFile = File(...), db: Session 
             detail=f"File must be pipe-delimited (|) with a question column (one of {_Q_COLS}). "
                    f"Found columns: {sorted(cols)} — if you see comma-joined names here, re-save it pipe-delimited.",
         )
+
+    # Replace mode: wipe the project's existing questions (cascades to their responses, AI
+    # grades, and human reviews) before importing. Done AFTER the file validated above, so a
+    # malformed upload can't destroy existing data. Delete via the ORM to trigger cascades.
+    replaced = 0
+    if replace:
+        for existing in db.query(Item).filter(Item.project_id == project_id).all():
+            db.delete(existing)
+            replaced += 1
+        db.flush()
 
     items_created = responses_created = 0
     warnings: list[str] = []
@@ -113,7 +124,8 @@ async def upload_csv(project_id: str, file: UploadFile = File(...), db: Session 
         items_created=items_created,
         responses_created=responses_created,
         warnings=warnings[:10],
-        detail=f"Imported {items_created} items ({responses_created} with responses)",
+        detail=(f"Replaced {replaced} existing question(s); " if replaced else "")
+        + f"imported {items_created} items ({responses_created} with responses)",
     )
 
 

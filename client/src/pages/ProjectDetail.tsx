@@ -100,8 +100,11 @@ export default function ProjectDetail() {
 
   async function upload() {
     const f = fileRef.current?.files?.[0]; if (!f) { toast.error('Choose a file first'); return }
+    // Uploading replaces the dataset. Confirm before wiping existing questions + their work.
+    if (stats.total > 0 && !window.confirm(
+      `Replace all ${stats.total} existing question(s) and their responses, AI grades, and reviews with this file? This can't be undone.`)) return
     setBusy(true)
-    try { const r = await api.uploadCsv(id, f); toast.success(r.detail || 'Imported'); load() }
+    try { const r = await api.uploadCsv(id, f, true); toast.success(r.detail || 'Imported'); load() }
     catch (e) { toast.error((e as Error).message) } finally { setBusy(false); if (fileRef.current) fileRef.current.value = '' }
   }
 
@@ -253,11 +256,17 @@ export default function ProjectDetail() {
           desc="Upload a pipe-delimited file of questions and their known-correct answers (the answer key)."
           status={stats.total ? `${stats.total} question${stats.total > 1 ? 's' : ''} · ${stats.withKey} with an answer key` : 'None yet'}
           open={openStep === 'data'} onToggle={() => toggleStep('data')}
-          actionLabel={stats.total ? 'Add more' : 'Add questions'}>
+          actionLabel={stats.total ? 'Replace file' : 'Add questions'}>
           <p className="mb-2 flex items-center gap-1.5 text-sm text-muted-foreground">
             <FileSpreadsheet className="h-4 w-4" /> Pipe-delimited columns: <code>question | expected_answer</code>
             <span className="text-xs">(a <code>response</code> column is optional — skips generation). Use <code>|</code> so commas in text are safe.</span>
           </p>
+          {stats.total > 0 && (
+            <div className="mb-2 flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              Uploading <span className="font-medium">replaces</span> all {stats.total} current question(s) and their responses, AI grades, and reviews. You'll be asked to confirm.
+            </div>
+          )}
           <div className="flex gap-2">
             <Input ref={fileRef} type="file" accept=".csv,.txt,.psv" className="cursor-pointer p-1.5" />
             <Button disabled={busy} onClick={upload}><Upload className="h-4 w-4" /> Upload</Button>
