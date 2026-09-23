@@ -118,6 +118,25 @@ def log_judgment(db: Session, judgment: Judgment) -> None:
             pass
 
 
+def log_judgment_by_id(judgment_id: str) -> None:
+    """Mirror one judgment on a FRESH session — for firing off the request thread so it doesn't
+    add MLflow latency to a reviewer's pass/fail click. Best-effort."""
+    from server.database import SessionLocal, get_engine
+
+    try:
+        get_engine()
+        assert SessionLocal is not None
+    except Exception:  # noqa: BLE001
+        return
+    db = SessionLocal()
+    try:
+        j = db.query(Judgment).filter(Judgment.id == judgment_id).first()
+        if j is not None:
+            log_judgment(db, j)
+    finally:
+        db.close()
+
+
 def log_project_ai_judgments(db: Session, project_id: str) -> int:
     """Mirror every LLM judgment in a project to MLflow — called after a grading run.
     Best-effort; returns how many it attempted."""
