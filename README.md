@@ -19,7 +19,9 @@ Deploy to **any Databricks workspace** as a Databricks App via the **Asset Bundl
 (`databricks.yml`).
 
 ### 0. Prerequisites
-- Databricks CLI **v0.265.0+** (`database_instances` support). Check: `databricks --version`.
+- Databricks CLI **v0.265.0+** (`database_instances` support).
+  - `brew install databricks/tap/databricks`
+  - Check: `databricks --version`.
 - Authenticated to the target workspace: `databricks auth login --host <workspace-url> --profile <PROFILE>`
 - Node 18+ on the deploy machine — the bundle builds the frontend automatically during
   `deploy` (see step 2). No manual npm steps.
