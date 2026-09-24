@@ -268,7 +268,7 @@ function DimensionCard({ card, scale, primary }: { card: DimCard; scale: string;
             <Bot className="h-4 w-4 text-muted-foreground" />
             <span className="font-semibold">AI {card.label.toLowerCase()} vs human {card.label.toLowerCase()}</span>
             {card.key === 'custom' && (
-              <span className="inline-flex items-center rounded-full bg-violet-500 px-2.5 py-1 text-xs font-semibold text-white">Custom</span>
+              <span className="inline-flex items-center rounded-full bg-primary px-2.5 py-1 text-xs font-semibold text-primary-foreground">Custom</span>
             )}
             {primary && <Badge variant="secondary" className="text-[10px]">primary</Badge>}
           </div>

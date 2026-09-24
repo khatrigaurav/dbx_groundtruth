@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { CheckCircle2, Loader2 } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import { api, setSession } from '../lib/api'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Button } from '../components/ui/button'
@@ -37,10 +37,8 @@ export default function Login() {
     <div className="flex min-h-screen items-center justify-center px-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="items-center text-center">
-          <span className="mb-1 grid h-10 w-10 place-items-center rounded-xl bg-primary text-primary-foreground">
-            <CheckCircle2 className="h-5 w-5" />
-          </span>
-          <CardTitle className="text-xl">GroundTruth</CardTitle>
+          <img src="/favicon.svg" alt="" aria-hidden className="mb-2 h-12 w-12" />
+          <CardTitle className="text-2xl">GroundTruth</CardTitle>
           <CardDescription>Answer-key evaluation for AI responses</CardDescription>
         </CardHeader>
         <CardContent className="text-center">

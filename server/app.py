@@ -146,6 +146,13 @@ if os.path.isdir(_client_dist):
     def serve_spa(full_path: str):
         if full_path.startswith("api/"):
             return JSONResponse({"detail": "Not Found"}, status_code=404)
+        # Serve real files living at the dist root (favicon.svg, icons.svg, etc.) — anything
+        # not under /assets. The normpath/prefix guard blocks path traversal (../). Everything
+        # else is a client-side route, so fall back to the SPA shell.
+        if full_path:
+            candidate = os.path.normpath(os.path.join(_client_dist, full_path))
+            if candidate.startswith(_client_dist + os.sep) and os.path.isfile(candidate):
+                return FileResponse(candidate)
         return FileResponse(os.path.join(_client_dist, "index.html"))
 else:
     logger.warning("client/dist not found (%s) — API-only mode until frontend is built", _client_dist)

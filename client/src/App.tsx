@@ -1,8 +1,8 @@
 import { BrowserRouter, Navigate, Route, Routes, Link } from 'react-router-dom'
 import { Toaster } from 'sonner'
-import { CheckCircle2 } from 'lucide-react'
 import { getSession } from './lib/api'
 import { Badge } from './components/ui/badge'
+import { Logo } from './components/Logo'
 import Login from './pages/Login'
 import Projects from './pages/Projects'
 import ProjectDetail from './pages/ProjectDetail'
@@ -12,22 +12,14 @@ import Results from './pages/Results'
 function Shell({ children }: { children: React.ReactNode }) {
   const user = getSession()
   const isFac = user?.role === 'facilitator'
-  const brand = (
-    <>
-      <span className="grid h-7 w-7 place-items-center rounded-md bg-primary text-primary-foreground">
-        <CheckCircle2 className="h-4 w-4" />
-      </span>
-      <span>GroundTruth</span>
-    </>
-  )
   return (
     <div className="min-h-full">
-      <header className="sticky top-0 z-10 border-b bg-card/80 backdrop-blur">
+      <header className="sticky top-0 z-10 border-b bg-card/70 backdrop-blur">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
           {/* Reviewers have no project list to go back to, so the brand isn't a link for them. */}
           {isFac
-            ? <Link to="/projects" className="flex items-center gap-2 font-semibold">{brand}</Link>
-            : <span className="flex items-center gap-2 font-semibold">{brand}</span>}
+            ? <Link to="/projects" className="transition-opacity hover:opacity-80"><Logo /></Link>
+            : <Logo />}
           {user && (
             <div className="flex items-center gap-3 text-sm">
               <span className="text-muted-foreground">{user.email}</span>
