@@ -37,7 +37,7 @@ export default function Login() {
     <div className="flex min-h-screen items-center justify-center px-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="items-center text-center">
-          <img src="/favicon.svg" alt="" aria-hidden className="mb-2 h-12 w-12" />
+          <img src="/genie-icon.svg" alt="" aria-hidden className="mb-2 h-14 w-14" />
           <CardTitle className="text-2xl">GroundTruth</CardTitle>
           <CardDescription>Answer-key evaluation for AI responses</CardDescription>
         </CardHeader>
