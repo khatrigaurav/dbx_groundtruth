@@ -2,13 +2,86 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { ArrowLeft, GitCompare, Save, Info } from 'lucide-react'
-import { api, type Comparison } from '../lib/api'
+import { api, type AgentRow, type Comparison } from '../lib/api'
 import { Card, CardContent } from '../components/ui/card'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { Badge } from '../components/ui/badge'
 import { cn } from '../lib/utils'
+
+// Categorical series colors (agents), fixed order — CVD-validated in index.css (--viz-*).
+const VIZ = ['var(--viz-1)', 'var(--viz-2)', 'var(--viz-3)', 'var(--viz-4)', 'var(--viz-5)', 'var(--viz-6)', 'var(--viz-7)', 'var(--viz-8)']
+
+type Series = { label: string; color: string }
+type BarGroup = { label: string; values: (number | null)[] } // values indexed by series
+
+// Grouped vertical bar chart: one bar per series (agent) within each group (dimension). Thin
+// bars with a 3px gap, rounded tops on the baseline, recessive gridlines, direct value labels,
+// per-bar hover title, and a ★ on the leading bar in each group. Legend is rendered by the caller.
+function GroupedBarChart({ groups, series, max, fmtVal }: {
+  groups: BarGroup[]; series: Series[]; max: number; fmtVal: (v: number) => string
+}) {
+  const barW = 30, barGap = 5, groupGap = 36, padL = 40, padT = 28, padB = 42, padR = 14, H = 268
+  const groupW = series.length * barW + (series.length - 1) * barGap
+  const W = padL + groups.length * groupW + (groups.length - 1) * groupGap + padR
+  const plotH = H - padT - padB
+  const baseY = padT + plotH
+  const y = (v: number) => padT + plotH * (1 - v / max)
+  const ticks = max === 1 ? [0, 0.25, 0.5, 0.75, 1] : [0, 1, 2, 3, 4, 5]
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width={W} style={{ maxWidth: '100%', height: 'auto' }} role="img" aria-label="Agent comparison by dimension">
+      {ticks.map(t => (
+        <g key={t}>
+          <line x1={padL} x2={W - padR} y1={y(t)} y2={y(t)} stroke="hsl(var(--border))" strokeWidth={1} />
+          <text x={padL - 6} y={y(t) + 3} textAnchor="end" fontSize={10} fill="hsl(var(--muted-foreground))">{max === 1 ? `${t * 100}%` : t}</text>
+        </g>
+      ))}
+      {groups.map((g, gi) => {
+        const gx = padL + gi * (groupW + groupGap)
+        const present = g.values.filter((v): v is number => v != null)
+        const best = present.length ? Math.max(...present) : null
+        return (
+          <g key={g.label}>
+            {g.values.map((v, si) => {
+              if (v == null) return null
+              const bx = gx + si * (barW + barGap)
+              const by = y(v)
+              const isBest = series.length > 1 && best != null && v === best
+              return (
+                <g key={si}>
+                  <rect x={bx} y={by} width={barW} height={Math.max(baseY - by, 1)} rx={3} fill={series[si].color}>
+                    <title>{series[si].label} · {g.label}: {fmtVal(v)}</title>
+                  </rect>
+                  {isBest && (
+                    <text x={bx + barW / 2} y={by - 15} textAnchor="middle" fontSize={10} fill="hsl(var(--success))">★</text>
+                  )}
+                  <text x={bx + barW / 2} y={by - 4} textAnchor="middle" fontSize={9} fill="hsl(var(--foreground))">
+                    {fmtVal(v)}
+                  </text>
+                </g>
+              )
+            })}
+            <text x={gx + groupW / 2} y={baseY + 15} textAnchor="middle" fontSize={11} fill="hsl(var(--foreground))">{g.label}</text>
+          </g>
+        )
+      })}
+      <line x1={padL} x2={W - padR} y1={baseY} y2={baseY} stroke="hsl(var(--border))" strokeWidth={1.5} />
+    </svg>
+  )
+}
+
+function Legend({ series }: { series: Series[] }) {
+  return (
+    <div className="flex flex-wrap gap-x-4 gap-y-1">
+      {series.map(s => (
+        <span key={s.label} className="inline-flex items-center gap-1.5 text-xs text-foreground">
+          <span className="h-2.5 w-2.5 rounded-sm" style={{ background: s.color }} />{s.label}
+        </span>
+      ))}
+    </div>
+  )
+}
 
 // Per-agent comparison: the validated LLM judge scores every agent (Genie + uploaded external
 // agents); here we name them and line up their scores per dimension. Kept separate from the
@@ -60,6 +133,22 @@ export default function Compare() {
   const scoreText = (v: number | null | undefined) =>
     v == null ? '—' : isLikert ? `${v.toFixed(2)} / 5` : `${Math.round(v * 100)}%`
 
+  // Chart inputs: agents are the categorical series; groups are dimensions (+ an Overall).
+  const series: Series[] = agents.map((a, i) => ({ label: a.label, color: VIZ[i % VIZ.length] }))
+  const val = (a: AgentRow, dk: string): number | null => {
+    const s = a.dimensions[dk]
+    return (isLikert ? s?.mean : s?.pass_rate) ?? null
+  }
+  const dimGroups: BarGroup[] = dims.map(d => ({ label: d.label, values: agents.map(a => val(a, d.key)) }))
+  const overallGroup: BarGroup[] = [{
+    label: 'Overall', values: agents.map(a => {
+      const vs = dims.map(d => val(a, d.key)).filter((v): v is number => v != null)
+      return vs.length ? vs.reduce((s, x) => s + x, 0) / vs.length : null
+    }),
+  }]
+  const chartMax = isLikert ? 5 : 1
+  const fmtVal = (v: number) => isLikert ? v.toFixed(1) : `${Math.round(v * 100)}%`
+
   return (
     <div className="space-y-6">
       <div>
@@ -109,7 +198,27 @@ export default function Compare() {
             </div>
           </div>
 
-          {/* 2. Scorecard */}
+          {/* 2. Charts */}
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Score comparison</h2>
+              <Legend series={series} />
+            </div>
+            <Card><CardContent className="space-y-6 py-5">
+              <div>
+                <div className="mb-1 text-xs font-medium text-muted-foreground">
+                  Overall — {isLikert ? 'mean score across dimensions' : 'average judge pass rate across dimensions'}
+                </div>
+                <div className="overflow-x-auto"><GroupedBarChart groups={overallGroup} series={series} max={chartMax} fmtVal={fmtVal} /></div>
+              </div>
+              <div>
+                <div className="mb-1 text-xs font-medium text-muted-foreground">By dimension</div>
+                <div className="overflow-x-auto"><GroupedBarChart groups={dimGroups} series={series} max={chartMax} fmtVal={fmtVal} /></div>
+              </div>
+            </CardContent></Card>
+          </div>
+
+          {/* 3. Scorecard (exact numbers / table view) */}
           <div className="space-y-2">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Judge scorecard by dimension</h2>
             <p className="text-xs text-muted-foreground">
