@@ -1,11 +1,29 @@
-# NOTE: For bundle deploys (the supported path — see DEPLOY.md), the app command and
-# environment are defined authoritatively in `databricks.yml` under
-# resources.apps.groundtruth.config, which OVERRIDES this file. This stub only carries
-# the start command so a bare `databricks apps deploy` (no bundle) still launches.
-# All env vars — including the Lakebase endpoint, serving endpoint, warehouse and
-# experiment bindings — are set by the bundle so nothing here is workspace-specific.
+# Databricks Apps reads THIS file at runtime for the app's command and env.
+#
+# The bundle (databricks.yml → resources.apps.groundtruth.config) also declares env, but in
+# practice that block was NOT reaching the running process (the app came up on SQLite because
+# DATABASE_ENV was unset). So the DB-critical env — which is static (the Lakebase instance name
+# `groundtruth-db` is fixed) — is set here to guarantee it reaches the app. The `database`
+# resource binding in databricks.yml still injects the PG* connection vars.
+#
+# Templated/binding-derived env (MLflow experiment id, warehouse id, workspace file path) stays
+# in databricks.yml since it can't be expressed statically here.
 command:
   - "gunicorn"
   - "server.app:app"
   - "-c"
   - "gunicorn_conf.py"
+
+env:
+  # Use Lakebase Postgres, not the ephemeral local SQLite file.
+  - name: DATABASE_ENV
+    value: postgres
+  # OAuth endpoint for the Lakebase credential (instance name is fixed → static path).
+  - name: ENDPOINT_NAME
+    value: projects/groundtruth-db/branches/production/endpoints/primary
+  # App tables live in this Postgres schema (auto-created at startup).
+  - name: LAKEBASE_SCHEMA_NAME
+    value: groundtruth
+  # Model-serving endpoint for the LLM judge + summary (code default is the same, set explicitly).
+  - name: SERVING_ENDPOINT
+    value: databricks-claude-sonnet-5

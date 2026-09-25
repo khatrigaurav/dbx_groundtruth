@@ -8,6 +8,31 @@ import os
 IS_DATABRICKS_APP = bool(os.environ.get("DATABRICKS_APP_NAME"))
 
 
+def chat_content_text(content) -> str:
+    """Normalize an OpenAI-compatible chat message's `content` to plain text.
+
+    Claude models served through the Databricks OpenAI-compatible shim can return `content`
+    as a list of content parts (e.g. [{"type": "text", "text": "..."}]) instead of a string.
+    Calling `.strip()` on that list raised "'list' object has no attribute 'strip'". This
+    accepts a str, a list of parts (dicts or objects with a `.text`), or None.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for p in content:
+            if isinstance(p, str):
+                parts.append(p)
+            elif isinstance(p, dict):
+                parts.append(str(p.get("text") or p.get("content") or ""))
+            else:
+                parts.append(str(getattr(p, "text", "") or ""))
+        return "".join(parts)
+    return str(content)
+
+
 def get_workspace_client():
     from databricks.sdk import WorkspaceClient
 

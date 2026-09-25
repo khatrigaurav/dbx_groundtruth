@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as _dt
 import enum
 import logging
+import os
 import uuid
 
 from sqlalchemy import (
@@ -113,6 +114,13 @@ class Project(Base):
     judge_model = Column(String(255), nullable=True)
     # Blind review: when true, human reviewers don't see the expected answer while judging.
     blind_review = Column(Boolean, nullable=False, default=False)
+    # Persisted AI Results summary — survives reloads and is shared across users. Regenerated on
+    # demand; summary_note is set only for the computed (non-LLM) fallback. summary_at is an ISO
+    # timestamp string (stored as text to keep the additive ALTER portable across SQLite/Postgres).
+    summary = Column(Text, nullable=True)
+    summary_note = Column(Text, nullable=True)
+    summary_model = Column(String(255), nullable=True)
+    summary_at = Column(String(40), nullable=True)
 
     items = relationship("Item", back_populates="project", cascade="all, delete-orphan")
     members = relationship("ProjectMember", back_populates="project", cascade="all, delete-orphan")
@@ -264,6 +272,13 @@ def bootstrap_database() -> None:
     """
     engine = get_engine()
     is_pg = detect_database_backend() == DatabaseBackend.POSTGRESQL
+    # Log the resolved backend loudly so it's never ambiguous which store the app is using
+    # (silent SQLite in prod is a data-loss trap — see the guard in db_config).
+    if is_pg:
+        logger.info("DB backend: Lakebase Postgres — host=%s db=%s schema=%s",
+                    os.getenv("PGHOST"), os.getenv("PGDATABASE"), get_schema_name())
+    else:
+        logger.info("DB backend: SQLite (local file) — NOT Lakebase")
     if is_pg:
         from sqlalchemy import text
 
@@ -287,6 +302,10 @@ _ADDITIVE_COLUMNS = [
     ("projects", "mlflow_experiment_id", "VARCHAR(255)"),
     ("projects", "genie_last_run_mode", "VARCHAR(20)"),
     ("projects", "blind_review", "BOOLEAN NOT NULL DEFAULT FALSE"),
+    ("projects", "summary", "TEXT"),
+    ("projects", "summary_note", "TEXT"),
+    ("projects", "summary_model", "VARCHAR(255)"),
+    ("projects", "summary_at", "VARCHAR(40)"),
     ("judgments", "judge_key", "VARCHAR(64)"),
     ("judgments", "mlflow_assessment_id", "VARCHAR(64)"),
     ("generation_runs", "phase", "VARCHAR(20)"),

@@ -171,7 +171,18 @@ def detect_database_backend() -> DatabaseBackend:
     if database_env == "postgres":
         if LakebaseConfig.from_env() is not None:
             return DatabaseBackend.POSTGRESQL
-        logger.warning("DATABASE_ENV=postgres but Lakebase env vars missing; falling back to SQLite.")
+        # PG* connection vars aren't present. Inside a deployed Databricks App this means the
+        # `database` resource binding isn't injecting them — refuse to silently fall back to
+        # ephemeral SQLite, which loses all data on every restart. Fail loud instead.
+        missing = ", ".join(v for v in ("PGHOST", "PGDATABASE", "PGUSER") if not os.getenv(v)) or "PG*"
+        if os.getenv("DATABRICKS_APP_NAME"):
+            raise RuntimeError(
+                f"DATABASE_ENV=postgres but Lakebase connection vars are missing ({missing}). "
+                "Refusing to fall back to ephemeral SQLite inside a Databricks App — that silently "
+                "loses data on every restart. Verify the app's `database` resource binding injects "
+                "PG* (check the app's Environment tab) and redeploy/restart the app."
+            )
+        logger.warning("DATABASE_ENV=postgres but Lakebase env vars missing (%s); falling back to SQLite (local dev).", missing)
     return DatabaseBackend.SQLITE
 
 

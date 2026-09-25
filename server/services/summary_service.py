@@ -11,10 +11,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from server.config import get_oauth_token, get_workspace_host
+from server.config import chat_content_text, get_oauth_token, get_workspace_host
 from server.database import Item, JudgmentKind, Project
 from server.services import metrics_service as METRICS
 
@@ -184,13 +185,40 @@ def summarize_results(db: Session, project_id: str, model: str | None = None) ->
             ],
             max_tokens=650,
         )
-        text = (resp.choices[0].message.content or "").strip()
+        text = chat_content_text(resp.choices[0].message.content).strip()
         if not text:
             raise ValueError("the model returned an empty response")
-        return {"summary": text, "model": model, "n_gold": n_gold, "small_sample": small_sample}
+        at = _persist(db, project, text, model, None)
+        return {"summary": text, "model": model, "at": at, "n_gold": n_gold, "small_sample": small_sample}
     except Exception as e:  # noqa: BLE001
         # Never leave the panel blank: fall back to a computed, no-LLM read of the same numbers.
         logger.warning("results summary LLM generation failed (%s); using computed fallback", e)
-        return {"summary": _fallback_summary(project.name, metrics), "model": "computed (no LLM)",
-                "fallback": True, "note": f"LLM summary unavailable ({e}); showing a computed read.",
-                "n_gold": n_gold, "small_sample": small_sample}
+        fb, note = _fallback_summary(project.name, metrics), f"LLM summary unavailable ({e}); showing a computed read."
+        at = _persist(db, project, fb, "computed (no LLM)", note)
+        return {"summary": fb, "model": "computed (no LLM)", "fallback": True, "note": note,
+                "at": at, "n_gold": n_gold, "small_sample": small_sample}
+
+
+def _persist(db: Session, project: Project, text: str, model: str, note: str | None) -> str | None:
+    """Save the generated summary onto the project row (Lakebase/SQLite) so it survives reloads
+    and is shared across users. Best-effort — a persistence failure never blocks returning the text."""
+    at = datetime.now(timezone.utc).isoformat()
+    project.summary, project.summary_note, project.summary_model, project.summary_at = text, note, model, at
+    try:
+        db.commit()
+    except Exception as e:  # noqa: BLE001
+        db.rollback()
+        logger.warning("persisting results summary failed (%s); returning it unsaved", e)
+        return None
+    return at
+
+
+def saved_summary(db: Session, project_id: str) -> dict:
+    """The last-saved Results summary for a project (or {"summary": None} if none yet)."""
+    p = db.query(Project).filter(Project.id == project_id).first()
+    if p is None:
+        return {"detail": "Project not found."}
+    if not p.summary:
+        return {"summary": None}
+    return {"summary": p.summary, "model": p.summary_model, "note": p.summary_note,
+            "fallback": bool(p.summary_note), "at": p.summary_at}

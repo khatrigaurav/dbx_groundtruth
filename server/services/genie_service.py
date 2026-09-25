@@ -21,7 +21,7 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from server.config import get_oauth_token, get_workspace_host
+from server.config import chat_content_text, get_oauth_token, get_workspace_host
 from server.database import Item, ItemSource, Response
 
 logger = logging.getLogger(__name__)
@@ -173,7 +173,7 @@ def _synthesize(question: str, genie_markdown: str, model: str) -> str:
         ],
         max_tokens=700,
     )
-    return resp.choices[0].message.content or ""
+    return chat_content_text(resp.choices[0].message.content)
 
 
 def _log_trace(experiment_id: str | None, question: str, answer: str, sql: str,

@@ -138,9 +138,20 @@ def list_disagreements(project_id: str, db: Session = Depends(get_db)):
         for r in rows}
 
 
+@router.get("/{project_id}/results-summary")
+def get_results_summary(project_id: str, db: Session = Depends(get_db)):
+    """The last-saved Results summary (persisted on generate), so it survives reloads."""
+    if A.get_project_or_none(db, project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    from server.services import summary_service as SUMMARY
+
+    return SUMMARY.saved_summary(db, project_id)
+
+
 @router.post("/{project_id}/results-summary")
 def results_summary(project_id: str, db: Session = Depends(get_db)):
-    """LLM-written plain-English read of the Results (judge trustworthiness, biases, next step)."""
+    """LLM-written plain-English read of the Results (judge trustworthiness, biases, next step).
+    Persists the result on the project so it survives reloads and is shared across users."""
     if A.get_project_or_none(db, project_id) is None:
         raise HTTPException(status_code=404, detail="Project not found")
     from server.services import summary_service as SUMMARY

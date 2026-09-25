@@ -378,17 +378,17 @@ export default function ProjectDetail() {
           locked={stats.total === 0}>
           <div className="space-y-3">
             <div className="grid gap-2 sm:grid-cols-2">
-              <button type="button" disabled={generating} onClick={() => setGenMode('sp')}
-                className={cn('rounded-lg border p-3 text-left transition-colors disabled:opacity-60',
-                  genMode === 'sp' ? 'border-primary bg-accent ring-1 ring-primary/20' : 'hover:bg-muted')}>
-                <div className="flex items-center gap-1.5 text-sm font-medium"><Server className="h-4 w-4" /> Background (recommended)</div>
-                <div className="text-xs text-muted-foreground">Runs as the app service principal. Reliable; ~1–2 min per question. Won't appear in your Genie One history.</div>
-              </button>
               <button type="button" disabled={generating} onClick={() => setGenMode('user')}
                 className={cn('rounded-lg border p-3 text-left transition-colors disabled:opacity-60',
                   genMode === 'user' ? 'border-primary bg-accent ring-1 ring-primary/20' : 'hover:bg-muted')}>
                 <div className="flex items-center gap-1.5 text-sm font-medium"><UserIcon className="h-4 w-4" /> Run as me</div>
                 <div className="text-xs text-muted-foreground">Runs on your behalf — uses your data access and shows in your Genie One history.</div>
+              </button>
+              <button type="button" disabled={generating} onClick={() => setGenMode('sp')}
+                className={cn('rounded-lg border p-3 text-left transition-colors disabled:opacity-60',
+                  genMode === 'sp' ? 'border-primary bg-accent ring-1 ring-primary/20' : 'hover:bg-muted')}>
+                <div className="flex items-center gap-1.5 text-sm font-medium"><Server className="h-4 w-4" /> Background</div>
+                <div className="text-xs text-muted-foreground">Runs as the app service principal.</div>
               </button>
             </div>
             <div className="flex gap-2">

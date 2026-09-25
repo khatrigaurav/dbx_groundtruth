@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Link, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
   ArrowLeft, Info, Sparkles, RefreshCw, Users, Bot, Key,
   CheckCircle2, AlertTriangle, XCircle, HelpCircle, Layers,
-  ChevronDown, ChevronUp, ExternalLink, FlaskConical,
+  ChevronDown, ChevronUp, ChevronRight, ExternalLink, FlaskConical,
 } from 'lucide-react'
 import {
   api, type AiVsHuman, type DimensionCard as DimCard, type DisagreementAudit,
@@ -99,6 +100,33 @@ function Tip({ text }: { text: string }) {
   )
 }
 
+// Like Tip, but renders the bubble into document.body via a portal with fixed positioning, so
+// it escapes clipping ancestors (the comparison table's overflow-x-auto clipped the inline Tip).
+function InfoTip({ text }: { text: string }) {
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null)
+  const ref = useRef<HTMLSpanElement>(null)
+  const show = () => {
+    const r = ref.current?.getBoundingClientRect()
+    if (!r) return
+    const x = Math.min(Math.max(r.left + r.width / 2, 120), window.innerWidth - 120)
+    setPos({ x, y: r.top })
+  }
+  const hide = () => setPos(null)
+  return (
+    <span ref={ref} tabIndex={0} onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={hide}
+      className="inline-flex cursor-help align-middle outline-none">
+      <Info className="h-3 w-3 text-muted-foreground/60 hover:text-muted-foreground focus:text-muted-foreground" />
+      {pos && createPortal(
+        <span role="tooltip"
+          style={{ position: 'fixed', left: pos.x, top: pos.y - 8, transform: 'translate(-50%, -100%)', zIndex: 100, pointerEvents: 'none' }}
+          className="w-56 rounded-md bg-foreground px-2.5 py-1.5 text-[11px] font-normal normal-case leading-snug tracking-normal text-background shadow-lg">
+          {text}
+        </span>,
+        document.body)}
+    </span>
+  )
+}
+
 function VerdictCell({ v, s }: { v?: V; s?: number }) {
   if (s != null) return <Badge variant={s >= 3 ? 'success' : 'destructive'}>{s}</Badge>
   if (!v) return <Badge variant="muted">—</Badge>
@@ -149,7 +177,6 @@ function CalibrationChip({ cal, bias, scale }: { cal?: string | null; bias?: num
   return (
     <span className={cn('text-xs font-medium', cls)}>
       Calibration: {cal}{b}
-      <Tip text="Systematic leniency/harshness — how much more (or less) often the judge passes vs the human panel. Reported separately from agreement: a judge can agree yet still be biased." />
     </span>
   )
 }
@@ -172,7 +199,6 @@ function HumanAgreementStrip({ h }: { h: HumanAgreementT }) {
       <span className="font-semibold">Reviewer agreement: {level}</span>
       <span className="tabular-nums">α {fmt(h.alpha)}{ciText(h.alpha_ci) ? ` · ${ciText(h.alpha_ci)}` : ''}</span>
       <span className="text-current/70">· {h.n_raters} reviewers, {h.n_multi_rated} co-rated</span>
-      <Tip text="Inter-reviewer Krippendorff's α for this dimension only. Answered first: if reviewers don't agree, the rubric is ambiguous and low AI agreement is not proof the judge is bad." />
       {level === 'low' && <span className="font-medium">— ambiguous rubric; audit gold labels first.</span>}
     </div>
   )
@@ -187,18 +213,14 @@ function AiVsHumanBinary({ a }: { a: AiVsHuman }) {
         {a.confusion && <span>· {a.confusion.fp} false-pos, {a.confusion.fn} false-neg</span>}
       </div>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <Metric big label="Balanced acc." value={fmt(a.balanced_accuracy)} sub={ciText(a.balanced_accuracy_ci)}
-          hint="Average of recall and specificity — the headline metric under class imbalance (accuracy alone is misleading when most labels are one class)." />
-        <Metric label="MCC" value={fmt(a.mcc)}
-          hint="Matthews correlation — robust to class imbalance. −1 to +1; >0.5 strong." />
-        <Metric label="Cohen's κ" value={fmt(a.cohen_kappa)}
-          hint="Chance-corrected agreement with the human panel. ≥0.6 substantial, ≥0.8 near-perfect." />
-        <Metric label="F1" value={fmt(a.f1)}
-          hint="Harmonic mean of precision and recall. Can look high even when specificity is 0 — read it alongside balanced accuracy." />
-        <Metric label="Precision" value={fmt(a.precision)} hint="Of items the judge passed, how many humans also passed." />
-        <Metric label="Recall" value={fmt(a.recall)} hint="Of items humans passed, how many the judge also passed." />
-        <Metric label="Specificity" value={fmt(a.specificity)} hint="Of items humans FAILED, how many the judge also failed — its ability to catch failures." />
-        <Metric label="Accuracy" value={fmt(a.accuracy)} hint="Raw share of agreeing items. Inflated under class imbalance — don't read alone." />
+        <Metric big label="Balanced acc." value={fmt(a.balanced_accuracy)} sub={ciText(a.balanced_accuracy_ci)} />
+        <Metric label="MCC" value={fmt(a.mcc)} />
+        <Metric label="Cohen's κ" value={fmt(a.cohen_kappa)} />
+        <Metric label="F1" value={fmt(a.f1)} />
+        <Metric label="Precision" value={fmt(a.precision)} />
+        <Metric label="Recall" value={fmt(a.recall)} />
+        <Metric label="Specificity" value={fmt(a.specificity)} />
+        <Metric label="Accuracy" value={fmt(a.accuracy)} />
       </div>
       <div className="grid gap-2 sm:grid-cols-[1fr_auto] sm:items-center">
         {a.confusion && <Confusion c={a.confusion} />}
@@ -212,13 +234,12 @@ function AiVsHumanLikert({ a }: { a: AiVsHuman }) {
   return (
     <>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-        <Metric big label="Spearman ρ" value={fmt(a.spearman)} sub={ciText(a.spearman_ci)}
-          hint="Rank correlation between judge and human scores. 1 = identical ordering." />
-        <Metric label="QWK" value={fmt(a.qwk)} hint="Quadratic weighted kappa — the standard ordinal-agreement metric for graded scoring." />
-        <Metric label="MAE" value={fmt(a.mae)} hint="Mean absolute error between judge and human scores (points on 1–5)." />
-        <Metric label="RMSE" value={fmt(a.rmse)} hint="Root-mean-square error — penalizes large misses more than MAE." />
-        <Metric label="Judge mean" value={fmt(a.judge_mean)} hint="Average score this judge gave." />
-        <Metric label="Human mean" value={fmt(a.human_mean)} hint="Average score the human panel gave on the same items." />
+        <Metric big label="Spearman ρ" value={fmt(a.spearman)} sub={ciText(a.spearman_ci)} />
+        <Metric label="QWK" value={fmt(a.qwk)} />
+        <Metric label="MAE" value={fmt(a.mae)} />
+        <Metric label="RMSE" value={fmt(a.rmse)} />
+        <Metric label="Judge mean" value={fmt(a.judge_mean)} />
+        <Metric label="Human mean" value={fmt(a.human_mean)} />
       </div>
       <CalibrationChip cal={a.calibration} bias={a.bias} scale="likert" />
     </>
@@ -358,17 +379,258 @@ function Overview({ m }: { m: Metrics }) {
   )
 }
 
+// --- Executive band (Tier 1) ------------------------------------------------
+// Severity for picking the "weakest" judge to surface (most concerning first).
+const GATE_SEVERITY: Record<string, number> = { fail: 0, review: 1, insufficient: 2, pass: 3 }
+
+// The dimension whose human labels drive the headline System-quality number:
+// the primary dimension, else the first with an AI-vs-human scorecard, else the first.
+function headlineDim(m: Metrics): DimCard | null {
+  const dims = m.dimensions ?? []
+  if (!dims.length) return null
+  const byKey = (k: string | null | undefined) => (k ? dims.find(d => d.key === k) : undefined)
+  return byKey(m.primary_dimension) ?? dims.find(d => d.ai_vs_human) ?? dims[0]
+}
+
+// System quality = how good the answers are, read from the TRUSTED human labels
+// (pass rate on binary, mean score on likert) — not from the AI judge. `plain` says in
+// words what the number is; `detail` carries the sample size.
+function qualityText(a: AiVsHuman | null | undefined, isLikert: boolean): { value: string; plain: string; detail: string } | null {
+  if (!a) return null
+  const graded = `${a.n} answer${a.n === 1 ? '' : 's'} graded`
+  if (isLikert) {
+    if (a.human_mean == null) return null
+    return { value: `${a.human_mean.toFixed(1)} / 5`, plain: 'average score from human review', detail: graded }
+  }
+  if (a.human_pass_rate == null) return null
+  return { value: `${Math.round(a.human_pass_rate * 100)}%`, plain: 'of answers passed human review', detail: graded }
+}
+
+// Short per-dimension quality chip so a single headline never hides a weak dimension.
+function dimShort(d: DimCard, isLikert: boolean): string | null {
+  const a = d.ai_vs_human
+  if (!a) return null
+  if (isLikert) return a.human_mean == null ? null : `${d.label} ${a.human_mean.toFixed(1)}`
+  return a.human_pass_rate == null ? null : `${d.label} ${Math.round(a.human_pass_rate * 100)}%`
+}
+
+function ExecBand({ m, isLikert }: { m: Metrics; isLikert: boolean }) {
+  const dims = m.dimensions ?? []
+  const hd = headlineDim(m)
+  const q = qualityText(hd?.ai_vs_human, isLikert)
+  const chips = dims.length > 1 ? (dims.map(d => dimShort(d, isLikert)).filter(Boolean) as string[]) : []
+
+  const judged = dims.filter(d => d.has_ai_judge)
+  const ready = judged.filter(d => d.gate.verdict === 'pass').length
+  const worst = judged
+    .filter(d => d.gate.verdict !== 'pass')
+    .sort((a, b) => GATE_SEVERITY[a.gate.verdict] - GATE_SEVERITY[b.gate.verdict])[0]
+  const alphas = dims.map(d => d.human).filter(h => h.computable && h.alpha != null).map(h => h.alpha as number)
+  const minAlpha = alphas.length ? Math.min(...alphas) : null
+
+  return (
+    <div className="grid gap-4 sm:grid-cols-2">
+      {/* Tile A — System quality: is the product good? */}
+      <Card>
+        <CardContent className="py-5">
+          <div className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            System quality
+            <Tip text="Share of the answers under test that human reviewers rated a pass — how good the answers are, per humans. This is the product signal, and it comes from the human panel, NOT the AI judge (whose reliability is shown as Judge trust)." />
+          </div>
+          {q ? (
+            <>
+              <div className="mt-1 text-4xl font-semibold tabular-nums">{q.value}</div>
+              <div className="mt-1 text-sm text-foreground">{q.plain}</div>
+              <div className="mt-0.5 text-[11px] text-muted-foreground">{hd?.label} · {q.detail}</div>
+              {chips.length > 0 && (
+                <div className="mt-3">
+                  <div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">By dimension</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {chips.map((c, i) => (
+                      <span key={i} className="rounded-full border bg-muted/40 px-2 py-0.5 text-[11px] tabular-nums text-muted-foreground">{c}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="mt-2 text-sm text-muted-foreground">Not enough human labels yet — have reviewers grade a sample to see system quality.</div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Tile B — Judge trust: can we believe that number? */}
+      <Card>
+        <CardContent className="py-5">
+          <div className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Judge trust
+            <Tip text="Whether the AI judges can be believed vs. the human panel. It gates how much to trust the system-quality number: a shaky judge means the quality read is only as strong as the small human-labeled sample." />
+          </div>
+          {judged.length > 0 ? (
+            <>
+              <div className="mt-1 flex items-baseline gap-2">
+                <span className="text-4xl font-semibold tabular-nums">{ready}<span className="text-2xl text-muted-foreground">/{judged.length}</span></span>
+                <span className="text-sm text-muted-foreground">judges ready</span>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                {worst ? (
+                  <><GateBadge verdict={worst.gate.verdict} hint={nextStep(worst)} /><span className="text-xs text-muted-foreground">weakest: {worst.label}</span></>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-xs text-success"><CheckCircle2 className="h-3.5 w-3.5" /> all dimensions trustworthy</span>
+                )}
+              </div>
+              {minAlpha != null && (
+                <div className="mt-2 text-[11px] text-muted-foreground">Panel agreement (Krippendorff α) as low as {minAlpha.toFixed(2)} across dimensions.</div>
+              )}
+            </>
+          ) : (
+            <div className="mt-2 text-sm text-muted-foreground">No AI judges configured yet.</div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
+// --- Per-dimension comparison table (Tier 2) --------------------------------
+// Subtle color ramp so accuracy differences pop down a column. Conventional
+// bands: accuracy-like (≥.80 good / ≥.65 ok) vs correlation-like (≥.60 / ≥.40).
+function metricTone(kind: 'acc' | 'corr', v: number | null | undefined): string {
+  if (v == null || Number.isNaN(v)) return ''
+  const [good, ok] = kind === 'acc' ? [0.8, 0.65] : [0.6, 0.4]
+  return v >= good ? 'text-success' : v >= ok ? 'text-amber-600' : 'text-destructive'
+}
+
+function NumCell({ v, tone }: { v: number | null | undefined; tone?: string }) {
+  return <TableCell className="text-center"><span className={cn('tabular-nums', tone)}>{fmt(v)}</span></TableCell>
+}
+
+const HUMAN_A_HINT = "Inter-reviewer Krippendorff's α for this dimension — do reviewers agree on the rubric? Low α means an ambiguous rubric, not necessarily a bad judge."
+const ITEMS_HINT = 'Number of human-labeled items this scorecard is computed on.'
+const GATE_HINT = 'Readiness verdict combining the signals — whether this judge can be trusted on this dimension.'
+
+function JudgeComparison({ dims, isLikert, primaryDim, onSelect, selected }: {
+  dims: DimCard[]; isLikert: boolean; primaryDim: string | null
+  onSelect: (key: string) => void; selected: string | null
+}) {
+  const cols: { label: string; hint: string }[] = isLikert
+    ? [
+        { label: 'Spearman ρ', hint: 'Rank correlation between judge and human scores. 1 = identical ordering.' },
+        { label: 'QWK', hint: 'Quadratic weighted kappa — the standard ordinal-agreement metric for graded scoring.' },
+        { label: 'MAE', hint: 'Mean absolute error between judge and human scores (points on 1–5). Lower is better.' },
+        { label: 'Human α', hint: HUMAN_A_HINT }, { label: 'Items', hint: ITEMS_HINT }, { label: 'Gate', hint: GATE_HINT },
+      ]
+    : [
+        { label: 'Bal. acc.', hint: 'Average of recall and specificity — the headline metric under class imbalance (plain accuracy misleads when most labels are one class).' },
+        { label: 'MCC', hint: 'Matthews correlation — robust to class imbalance. −1 to +1; >0.5 strong.' },
+        { label: "Cohen's κ", hint: 'Chance-corrected agreement with the human panel. ≥0.6 substantial, ≥0.8 near-perfect.' },
+        { label: 'F1', hint: 'Harmonic mean of precision and recall. Can look high even when specificity is 0 — read alongside balanced accuracy.' },
+        { label: 'Human α', hint: HUMAN_A_HINT }, { label: 'Items', hint: ITEMS_HINT }, { label: 'Gate', hint: GATE_HINT },
+      ]
+  return (
+    <Card className="overflow-x-auto">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Dimension</TableHead>
+            {cols.map(c => (
+              <TableHead key={c.label} className="text-center">
+                <span className="inline-flex items-center justify-center gap-1">{c.label}<InfoTip text={c.hint} /></span>
+              </TableHead>
+            ))}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {dims.map(d => {
+            const a = d.ai_vs_human
+            const primary = d.key === primaryDim
+            const has = d.has_ai_judge && a && d.n_gold > 0
+            return (
+              <TableRow key={d.key} onClick={() => onSelect(d.key)}
+                title="Click to inspect this judge's scorecard & per-item audit"
+                className={cn('cursor-pointer transition-colors hover:bg-muted/60',
+                  primary && 'bg-primary/5',
+                  selected === d.key && 'bg-primary/10 ring-1 ring-inset ring-primary/40')}>
+                <TableCell className="font-medium">
+                  <span className="inline-flex items-center gap-1.5">
+                    {d.label}
+                    {d.key === 'custom' && <span className="rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold text-primary-foreground">Custom</span>}
+                    {primary && <Badge variant="secondary" className="text-[10px]">primary</Badge>}
+                  </span>
+                </TableCell>
+                {!has ? (
+                  <TableCell colSpan={cols.length} className="text-center text-xs text-muted-foreground">
+                    {!d.has_ai_judge ? 'no AI judge for this dimension' : 'no overlapping human + AI labels yet'}
+                  </TableCell>
+                ) : (
+                  <>
+                    {isLikert ? (
+                      <>
+                        <NumCell v={a!.spearman} tone={metricTone('corr', a!.spearman)} />
+                        <NumCell v={a!.qwk} tone={metricTone('corr', a!.qwk)} />
+                        <NumCell v={a!.mae} />
+                      </>
+                    ) : (
+                      <>
+                        <NumCell v={a!.balanced_accuracy} tone={metricTone('acc', a!.balanced_accuracy)} />
+                        <NumCell v={a!.mcc} tone={metricTone('corr', a!.mcc)} />
+                        <NumCell v={a!.cohen_kappa} tone={metricTone('corr', a!.cohen_kappa)} />
+                        <NumCell v={a!.f1} tone={metricTone('acc', a!.f1)} />
+                      </>
+                    )}
+                    {d.human.computable
+                      ? <NumCell v={d.human.alpha} tone={metricTone('corr', d.human.alpha)} />
+                      : <TableCell className="text-center text-muted-foreground">—</TableCell>}
+                    <TableCell className="text-center tabular-nums">{a!.n ?? d.n_gold}</TableCell>
+                    <TableCell className="text-center"><GateBadge verdict={d.gate.verdict} hint={nextStep(d)} /></TableCell>
+                  </>
+                )}
+              </TableRow>
+            )
+          })}
+        </TableBody>
+      </Table>
+    </Card>
+  )
+}
+
+type CachedSummary = { text: string | null; note: string | null; at: string | null }
+
 function SummaryPanel({ id }: { id: string }) {
-  const [text, setText] = useState<string | null>(null)
-  const [note, setNote] = useState<string | null>(null)
+  // Seed from the session cache for an instant paint; the persisted copy on the project
+  // (Lakebase/SQLite) is the durable source of truth, fetched on mount below.
+  const cached = cacheGet<CachedSummary>(cacheKey('summary', id))
+  const [text, setText] = useState<string | null>(cached?.text ?? null)
+  const [note, setNote] = useState<string | null>(cached?.note ?? null)
+  const [at, setAt] = useState<string | null>(cached?.at ?? null)
   const [err, setErr] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [open, setOpen] = useState(true)   // expanded by default once a summary exists
+
+  const apply = (r: { summary?: string | null; fallback?: boolean; note?: string; at?: string | null }) => {
+    const nextNote = r.fallback ? (r.note || 'Computed read (LLM unavailable).') : null
+    setText(r.summary || null); setNote(nextNote); setAt(r.at ?? null)
+    cacheSet(cacheKey('summary', id), { text: r.summary || null, note: nextNote, at: r.at ?? null })
+  }
+
+  // Load the last-saved summary from the backend so it persists across reloads and users.
+  // Inlined (not via `apply`) so the effect's only dependency is the project id.
+  useEffect(() => {
+    let live = true
+    api.getResultsSummary(id).then(r => {
+      if (!live || !r?.summary) return
+      const n = r.fallback ? (r.note || 'Computed read (LLM unavailable).') : null
+      setText(r.summary); setNote(n); setAt(r.at ?? null)
+      cacheSet(cacheKey('summary', id), { text: r.summary, note: n, at: r.at ?? null })
+    }).catch(() => {})
+    return () => { live = false }
+  }, [id])
+
   const generate = async () => {
     setLoading(true); setErr(null); setNote(null)
     try {
       const r = await api.resultsSummary(id)
-      if (r.summary) { setText(r.summary); setNote(r.fallback ? (r.note || 'Computed read (LLM unavailable).') : null); setOpen(true) }
+      if (r.summary) { apply(r); setOpen(true) }
       else { setText(null); setErr(r.detail || 'No summary returned.') }
     } catch (e) { setErr((e as Error).message) } finally { setLoading(false) }
   }
@@ -401,6 +663,7 @@ function SummaryPanel({ id }: { id: string }) {
           <div className="mt-3">
             {note && <p className="mb-2 text-[11px] italic text-muted-foreground">{note}</p>}
             <Markdown>{text}</Markdown>
+            {at && <p className="mt-3 text-[11px] text-muted-foreground">Generated {new Date(at).toLocaleString()} · saved</p>}
           </div>
         )}
         {text && !open && (
@@ -427,8 +690,16 @@ export default function Results() {
   const [metrics, setMetrics] = useState<Metrics | null>(() => cacheGet<Metrics>(cacheKey('metrics', id)) ?? null)
   const [metricsLoaded, setMetricsLoaded] = useState<boolean>(() => cacheGet<Metrics>(cacheKey('metrics', id)) !== undefined)
   const [audits, setAudits] = useState<Record<string, DisagreementAudit>>(() => cacheGet<Record<string, DisagreementAudit>>(cacheKey('audits', id)) ?? {})
-  const [dimTab, setDimTab] = useState<string>('')
+  const [detailDim, setDetailDim] = useState<string>('')
   const [filter, setFilter] = useState<'all' | 'disagree'>('all')
+  const detailRef = useRef<HTMLDivElement>(null)
+  // Per-item rows the user expanded to read the full question/response/AI rationale.
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(() => new Set())
+  const toggleRow = (rid: string) => setExpandedRows(s => {
+    const n = new Set(s)
+    if (n.has(rid)) n.delete(rid); else n.add(rid)
+    return n
+  })
 
   const reload = () => {
     api.getProject(id).then(v => setProject(cacheSet(cacheKey('project', id), v))).catch(() => {})
@@ -443,7 +714,30 @@ export default function Results() {
   const emailOf = useMemo(() => Object.fromEntries(members.map(m => [m.id, m.email])), [members])
   const dims = metrics?.dimensions ?? []
   const primaryDim = metrics?.primary_dimension ?? null
-  const activeDim = dimTab || primaryDim || dims[0]?.key || ''
+  const activeDim = detailDim || primaryDim || dims[0]?.key || ''
+  const detailCard = dims.find(d => d.key === activeDim) ?? null
+
+  // Overview table → detail drilldown: pick a judge (toggle off if it's already open) and
+  // scroll its scorecard + per-item audit into view. Switching judges via the in-panel tabs
+  // uses setDetailDim directly, so it doesn't yank the scroll position.
+  const openDetail = (key: string) => {
+    setDetailDim(prev => {
+      const next = prev === key ? '' : key
+      if (next) requestAnimationFrame(() => detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+      return next
+    })
+  }
+
+  // Open the primary judge's detail once, on first load, so first-time users see the drilldown
+  // exists (without auto-scrolling). After that, row clicks / the Hide button own the state.
+  const firstKey = primaryDim || dims[0]?.key || ''
+  const autoOpened = useRef(false)
+  useEffect(() => {
+    if (!autoOpened.current && firstKey) {
+      autoOpened.current = true
+      setDetailDim(firstKey)
+    }
+  }, [firstKey])
 
   // Per-item diagnostics for the ACTIVE dimension: human panel vs AI, with a disagreement audit.
   const rows = useMemo(() => items.map(it => {
@@ -508,7 +802,7 @@ export default function Results() {
         <div className="flex flex-wrap items-center gap-2">
           <h1 className="text-2xl font-semibold tracking-tight">Results</h1>
           {project && <Badge variant="secondary">{isLikert ? 'Likert (1–5)' : 'Binary'}</Badge>}
-          <span className="text-sm text-muted-foreground">— each AI judge vs the human panel, per dimension</span>
+          <span className="text-sm text-muted-foreground">— how good the answers are, and whether the judges can be trusted</span>
           <div className="ml-auto flex items-center gap-3">
             {project && (
               <Button size="sm" variant="outline" onClick={runMlflowEval} disabled={evalBusy}
@@ -527,6 +821,9 @@ export default function Results() {
         </div>
       </div>
 
+      {/* Tier 1 — Executive band: is it good, and can we believe the number? */}
+      {metrics && dims.length > 0 && <ExecBand m={metrics} isLikert={isLikert} />}
+
       <SummaryPanel id={id} />
 
       {metrics && <Overview m={metrics} />}
@@ -540,14 +837,14 @@ export default function Results() {
         </Card>
       )}
 
-      {/* Per-dimension trust scorecards */}
+      {/* Tier 2 — Explore by dimension: line up each judge, click one to drill in */}
       {!metricsLoaded && dims.length === 0 ? (
         <CardsSkeleton />
       ) : dims.length > 0 ? (
-        <div className="grid gap-4 lg:grid-cols-2">
-          {dims.map(card => (
-            <DimensionCard key={card.key} card={card} scale={metrics!.scale} primary={card.key === primaryDim} />
-          ))}
+        <div className="space-y-2">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Explore by dimension</h2>
+          <p className="text-xs text-muted-foreground">Click a row to inspect that judge's scorecard and per-item audit below.</p>
+          <JudgeComparison dims={dims} isLikert={isLikert} primaryDim={primaryDim} onSelect={openDetail} selected={detailDim || null} />
         </div>
       ) : (
         <Card><CardContent className="py-8 text-center text-sm text-muted-foreground">
@@ -557,28 +854,41 @@ export default function Results() {
         </CardContent></Card>
       )}
 
-      {/* Per-item diagnostics + gold-label audit, for one dimension at a time */}
-      {dims.length > 0 && (
-        <div className="space-y-3">
+      {/* Tier 3 — Detail for ONE selected judge: its scorecard + per-item audit */}
+      {dims.length > 0 && detailDim && detailCard && (
+        <div ref={detailRef} className="space-y-4 scroll-mt-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Per-item diagnostics & gold-label audit</h2>
-            <Tabs value={filter} onValueChange={v => setFilter(v as typeof filter)}>
-              <TabsList>
-                <TabsTrigger value="all">All ({rows.length})</TabsTrigger>
-                <TabsTrigger value="disagree">Disagreements ({rows.filter(x => x.disagree).length})</TabsTrigger>
-              </TabsList>
-            </Tabs>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Judge detail</h2>
+              <Tabs value={activeDim} onValueChange={setDetailDim}>
+                <TabsList>
+                  {dims.map(d => <TabsTrigger key={d.key} value={d.key}>{d.label}</TabsTrigger>)}
+                </TabsList>
+              </Tabs>
+            </div>
+            <button type="button" onClick={() => setDetailDim('')}
+              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+              <ChevronUp className="h-3.5 w-3.5" /> Hide
+            </button>
           </div>
-          <Tabs value={activeDim} onValueChange={setDimTab}>
-            <TabsList>
-              {dims.map(d => <TabsTrigger key={d.key} value={d.key}>{d.label}</TabsTrigger>)}
-            </TabsList>
-          </Tabs>
-          <p className="text-xs text-muted-foreground">
-            Showing the <span className="font-medium">{dims.find(d => d.key === activeDim)?.label}</span> dimension.
-            Classify each AI/human disagreement so you don't assume every mismatch is an AI error — verify the gold label and question first.
-            Marking one as <span className="font-medium">“Human label incorrect”</span> or <span className="font-medium">“Ambiguous”</span> tells you to fix the answer key/rubric, not the judge.
-          </p>
+          <DimensionCard card={detailCard} scale={metrics!.scale} primary={detailCard.key === primaryDim} />
+
+          {/* Per-item diagnostics + gold-label audit, scoped to the selected dimension */}
+          <div className="space-y-3 pt-1">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Per-item diagnostics &amp; gold-label audit</h3>
+              <Tabs value={filter} onValueChange={v => setFilter(v as typeof filter)}>
+                <TabsList>
+                  <TabsTrigger value="all">All ({rows.length})</TabsTrigger>
+                  <TabsTrigger value="disagree">Disagreements ({rows.filter(x => x.disagree).length})</TabsTrigger>
+                </TabsList>
+              </Tabs>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Showing the <span className="font-medium">{detailCard.label}</span> dimension.
+              Classify each AI/human disagreement so you don't assume every mismatch is an AI error — verify the gold label and question first.
+              Marking one as <span className="font-medium">“Human label incorrect”</span> or <span className="font-medium">“Ambiguous”</span> tells you to fix the answer key/rubric, not the judge.
+            </p>
 
           {totalDisagree > 0 && (
             <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-xs">
@@ -606,18 +916,28 @@ export default function Results() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {shown.map(({ it, r, humanVs, panelBin, panelMean, ai, aiScore, aiRationale, disagree }) => (
-                  <TableRow key={it.id} className={disagree ? 'bg-amber-50' : ''}>
-                    <TableCell className="max-w-[12rem] truncate" title={it.question}>{it.question}</TableCell>
-                    <TableCell className="max-w-[9rem] truncate text-success" title={it.expected_answer || ''}>{it.expected_answer || '—'}</TableCell>
-                    <TableCell className="max-w-[14rem] truncate text-muted-foreground" title={r?.response_text}>{r?.response_text || '—'}</TableCell>
+                {shown.map(({ it, r, humanVs, panelBin, panelMean, ai, aiScore, aiRationale, disagree }) => {
+                  const isOpen = expandedRows.has(it.id)
+                  return (
+                  <Fragment key={it.id}>
+                  <TableRow onClick={() => toggleRow(it.id)}
+                    title="Click to expand full question, response & AI rationale"
+                    className={cn('cursor-pointer', disagree ? 'bg-amber-50 hover:bg-amber-100' : 'hover:bg-muted/50', isOpen && 'border-b-0')}>
+                    <TableCell className="max-w-[12rem]">
+                      <span className="flex items-center gap-1.5">
+                        <ChevronRight className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform', isOpen && 'rotate-90')} />
+                        <span className="truncate">{it.question}</span>
+                      </span>
+                    </TableCell>
+                    <TableCell className="max-w-[9rem] truncate text-success">{it.expected_answer || '—'}</TableCell>
+                    <TableCell className="max-w-[14rem] truncate text-muted-foreground">{r?.response_text || '—'}</TableCell>
                     <TableCell className="text-center" title={humanVs.map(j => `${labelFor(j.rater_id)}: ${j.score ?? j.verdict ?? '—'}`).join('\n')}>
                       <VerdictCell v={panelBin} s={isLikert ? (panelMean != null ? Math.round(panelMean) : undefined) : undefined} />
                       {humanVs.length > 1 && <div className="text-[10px] text-muted-foreground">{humanVs.length} reviewers</div>}
                     </TableCell>
                     <TableCell className="text-center"><VerdictCell v={ai} s={aiScore} /></TableCell>
-                    <TableCell className="max-w-[12rem] truncate text-muted-foreground" title={aiRationale || ''}>{aiRationale || '—'}</TableCell>
-                    <TableCell>
+                    <TableCell className="max-w-[12rem] truncate text-muted-foreground">{aiRationale || '—'}</TableCell>
+                    <TableCell onClick={e => e.stopPropagation()}>
                       {disagree ? (
                         <div className="flex items-center gap-1">
                           <select
@@ -633,13 +953,32 @@ export default function Results() {
                       ) : <span className="text-[11px] text-muted-foreground">agree</span>}
                     </TableCell>
                   </TableRow>
-                ))}
+                  {isOpen && (
+                    <TableRow className={cn(disagree ? 'bg-amber-50' : 'bg-muted/30', 'hover:bg-transparent')}>
+                      <TableCell colSpan={7} className="py-3">
+                        <dl className="grid gap-x-4 gap-y-2 pl-5 text-sm sm:grid-cols-[7rem_1fr]">
+                          <dt className="font-medium text-muted-foreground">Question</dt>
+                          <dd className="whitespace-pre-wrap">{it.question}</dd>
+                          <dt className="font-medium text-muted-foreground">Expected</dt>
+                          <dd className="whitespace-pre-wrap text-success">{it.expected_answer || '—'}</dd>
+                          <dt className="font-medium text-muted-foreground">Response</dt>
+                          <dd className="whitespace-pre-wrap">{r?.response_text || '—'}</dd>
+                          <dt className="font-medium text-muted-foreground">AI rationale</dt>
+                          <dd className="whitespace-pre-wrap">{aiRationale || <span className="text-muted-foreground">— (no rationale recorded)</span>}</dd>
+                        </dl>
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  </Fragment>
+                  )
+                })}
                 {shown.length === 0 && (
                   <TableRow><TableCell colSpan={7} className="py-10 text-center text-muted-foreground">No rows</TableCell></TableRow>
                 )}
               </TableBody>
             </Table>
           </Card>
+          </div>
         </div>
       )}
     </div>

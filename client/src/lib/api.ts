@@ -75,7 +75,7 @@ export type DisagreementCategory =
   | 'ai_incorrect' | 'human_label_incorrect' | 'ambiguous_question' | 'ambiguous_rubric'
   | 'different_interpretation' | 'insufficient_evidence' | 'other'
 export interface DisagreementAudit { category: DisagreementCategory; note?: string; reviewer_id?: string }
-export interface ResultsSummary { summary?: string; model?: string; detail?: string; fallback?: boolean; note?: string; n_gold?: number; small_sample?: boolean }
+export interface ResultsSummary { summary?: string | null; model?: string; detail?: string; fallback?: boolean; note?: string; n_gold?: number; small_sample?: boolean; at?: string | null }
 export interface GenerateResult {
   mode: GenerationMode; generated: number; run_id?: string; run_url?: string
   genie_url?: string; experiment_id?: string; experiment_url?: string
@@ -124,6 +124,7 @@ export const api = {
   judgeCatalog: () => req<{ judges: JudgeCatalogItem[]; models: string[] }>('GET', '/judge-catalog'),
   getMetrics: (id: string) => req<Metrics>('GET', `/projects/${id}/metrics`),
   resultsSummary: (id: string) => req<ResultsSummary>('POST', `/projects/${id}/results-summary`),
+  getResultsSummary: (id: string) => req<ResultsSummary>('GET', `/projects/${id}/results-summary`),
   mlflowEval: (id: string) =>
     req<{ detail?: string; evaluations_url?: string; n?: number; judges?: string[] }>(
       'POST', `/projects/${id}/mlflow-eval`),
