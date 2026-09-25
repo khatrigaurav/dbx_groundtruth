@@ -54,6 +54,19 @@ def get_or_create_user(db: Session, email: str, name: str | None, role: UserRole
     return user
 
 
+def current_user(request, db: Session) -> User | None:
+    """The signed-in user as a PERSISTED row (created on first sight), resolved server-side from
+    the forwarded identity. Prefer this over trusting a client-supplied id when writing a
+    user-referencing FK (projects.created_by, judgments.rater_id, …): it guarantees the users row
+    exists, so Postgres FK constraints can't dangle. (SQLite silently allowed dangling FKs; a real
+    Lakebase Postgres does not.) Returns None only when identity can't be resolved (local dev
+    without DEV_FACILITATOR_EMAIL)."""
+    ident = resolve_identity(request)
+    if ident is None:
+        return None
+    return get_or_create_user(db, ident["email"], ident.get("name"))
+
+
 def resolve_role(db: Session, user_id: str) -> UserRole:
     """Role is derived from project membership, not a stored flag:
       - invited to a project only as a reviewer (TESTER) → scoped reviewer;

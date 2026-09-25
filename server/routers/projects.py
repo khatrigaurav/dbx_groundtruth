@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from server import auth_service as A
@@ -60,17 +60,21 @@ def list_projects(db: Session = Depends(get_db)):
 @router.post("", response_model=ProjectOut)
 def create_project(
     body: ProjectCreate,
-    x_user_id: str | None = Header(default=None),
+    request: Request,
     db: Session = Depends(get_db),
 ):
+    # Resolve the creator server-side (persisted user) rather than trusting a client id — the
+    # created_by FK requires the users row to exist (Postgres enforces it; SQLite didn't).
+    creator = A.current_user(request, db)
+    created_by = creator.id if creator else None
     project = Project(name=body.name, description=body.description,
-                      scale=body.scale, created_by=x_user_id, blind_review=body.blind_review)
+                      scale=body.scale, created_by=created_by, blind_review=body.blind_review)
     db.add(project)
     db.commit()
     db.refresh(project)
     # Creator becomes a facilitator member.
-    if x_user_id:
-        A.ensure_membership(db, project.id, x_user_id, UserRole.FACILITATOR)
+    if created_by:
+        A.ensure_membership(db, project.id, created_by, UserRole.FACILITATOR)
     return _project_out(db, project)
 
 

@@ -10,9 +10,10 @@ The disagreement-audit endpoints back the gold-label audit workflow on the Resul
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
+from server import auth_service as A
 from server.database import (
     DisagreementCategory,
     DisagreementReview,
@@ -58,11 +59,18 @@ def _upsert_human(db: Session, response_id: str, *, rater_id: str | None, judge_
     return j
 
 
+def _rater_id(request, db, body_rater_id: str | None) -> str | None:
+    """The reviewer as a persisted user id. Resolve server-side so the rater_id FK can't dangle
+    (falls back to the client value only in local dev where identity isn't forwarded)."""
+    u = A.current_user(request, db)
+    return u.id if u else body_rater_id
+
+
 @router.post("/{response_id}/judgment", response_model=JudgmentOut)
-def submit_human_judgment(response_id: str, body: JudgmentCreate, db: Session = Depends(get_db)):
+def submit_human_judgment(response_id: str, body: JudgmentCreate, request: Request, db: Session = Depends(get_db)):
     if db.query(Response).filter(Response.id == response_id).first() is None:
         raise HTTPException(status_code=404, detail="Response not found")
-    j = _upsert_human(db, response_id, rater_id=body.rater_id, judge_key=body.judge_key,
+    j = _upsert_human(db, response_id, rater_id=_rater_id(request, db, body.rater_id), judge_key=body.judge_key,
                       verdict=body.verdict, score=body.score, rationale=body.rationale)
     db.commit()
     db.refresh(j)
@@ -70,13 +78,14 @@ def submit_human_judgment(response_id: str, body: JudgmentCreate, db: Session = 
 
 
 @router.post("/{response_id}/judgments", response_model=list[JudgmentOut])
-def submit_human_judgments(response_id: str, body: JudgmentBatchCreate, db: Session = Depends(get_db)):
+def submit_human_judgments(response_id: str, body: JudgmentBatchCreate, request: Request, db: Session = Depends(get_db)):
     """Save a reviewer's verdicts across every dimension for one response, with a shared comment."""
     if db.query(Response).filter(Response.id == response_id).first() is None:
         raise HTTPException(status_code=404, detail="Response not found")
+    rater_id = _rater_id(request, db, body.rater_id)
     out: list[Judgment] = []
     for d in body.dims:
-        out.append(_upsert_human(db, response_id, rater_id=body.rater_id, judge_key=d.judge_key,
+        out.append(_upsert_human(db, response_id, rater_id=rater_id, judge_key=d.judge_key,
                                  verdict=d.verdict, score=d.score, rationale=body.rationale))
     db.commit()
     for j in out:
@@ -87,6 +96,7 @@ def submit_human_judgments(response_id: str, body: JudgmentBatchCreate, db: Sess
 # --- gold-label audit (disagreement classification) --------------------------
 @router.post("/{response_id}/disagreement", response_model=DisagreementReviewOut)
 def classify_disagreement(response_id: str, body: DisagreementReviewCreate,
+                          request: Request,
                           x_user_id: str | None = Header(default=None),
                           db: Session = Depends(get_db)):
     if db.query(Response).filter(Response.id == response_id).first() is None:
@@ -101,14 +111,15 @@ def classify_disagreement(response_id: str, body: DisagreementReviewCreate,
                 DisagreementReview.judge_key == body.judge_key)
         .first()
     )
+    reviewer_id = _rater_id(request, db, body.reviewer_id or x_user_id)
     if row:
         row.category = category
         row.note = body.note
-        row.reviewer_id = body.reviewer_id or x_user_id
+        row.reviewer_id = reviewer_id
     else:
         row = DisagreementReview(response_id=response_id, judge_key=body.judge_key,
                                  category=category, note=body.note,
-                                 reviewer_id=body.reviewer_id or x_user_id)
+                                 reviewer_id=reviewer_id)
         db.add(row)
     db.commit()
     return DisagreementReviewOut(response_id=response_id, judge_key=body.judge_key,
