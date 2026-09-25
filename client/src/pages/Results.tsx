@@ -8,7 +8,7 @@ import {
   ChevronDown, ChevronUp, ChevronRight, ExternalLink, FlaskConical,
 } from 'lucide-react'
 import {
-  api, type AiVsHuman, type DimensionCard as DimCard, type DisagreementAudit,
+  api, baselineResponse, type AiVsHuman, type DimensionCard as DimCard, type DisagreementAudit,
   type DisagreementCategory, type HumanAgreement as HumanAgreementT,
   type Item, type Metrics, type Project, type User, type Verdict,
 } from '../lib/api'
@@ -741,7 +741,7 @@ export default function Results() {
 
   // Per-item diagnostics for the ACTIVE dimension: human panel vs AI, with a disagreement audit.
   const rows = useMemo(() => items.map(it => {
-    const r = it.responses[0]
+    const r = baselineResponse(it)
     const js = r?.judgments ?? []
     const humanMatch = (jk?: string) => jk === activeDim || (!jk && activeDim === primaryDim)
     const humanVs = js.filter(j => j.kind === 'human' && humanMatch(j.judge_key) && (j.verdict || j.score != null))

@@ -37,6 +37,23 @@ _EXP_COLS = ("expected_answer", "expected", "answer", "ground_truth")
 _RESP_COLS = ("response", "response_preview", "output")
 _MODEL_COLS = ("model", "model_name")
 
+# Any column that isn't one of the known roles above is treated as an external agent's response
+# column (e.g. agent1_response, "Claude", claude_mcp_response). Each becomes one Response per row,
+# with model_name = the agent name — the grouping key for the comparison analysis.
+_RESERVED_COLS = set(_Q_COLS) | set(_EXP_COLS) | set(_MODEL_COLS) | set(_RESP_COLS) | {
+    "context", "generated_sql", "csv_row", "filename",
+}
+
+
+def _agent_name(col: str) -> str:
+    """Turn an agent-response column header into a model_name, e.g. 'agent1_response' -> 'agent1'."""
+    c = (col or "").strip()
+    low = c.lower()
+    for suf in ("_response", "_answer", "_output", "_reply"):
+        if low.endswith(suf):
+            return c[: -len(suf)].rstrip("_ ") or c
+    return c
+
 
 def _clean(text: str | None) -> str:
     if not text:
@@ -99,7 +116,11 @@ async def upload_csv(project_id: str, file: UploadFile = File(...),
             threading.Thread(target=purge_traces,
                              args=(proj.mlflow_experiment_id, old_trace_ids), daemon=True).start()
 
+    # Extra columns (beyond question/expected/model/response) are external-agent response columns.
+    agent_cols = [c for c in reader.fieldnames if c and c.lower().strip() not in _RESERVED_COLS]
+
     items_created = responses_created = 0
+    agents_seen: set[str] = set()
     warnings: list[str] = []
     for n, row in enumerate(reader, start=1):
         question = _pick(row, _Q_COLS)
@@ -117,26 +138,34 @@ async def upload_csv(project_id: str, file: UploadFile = File(...),
         db.flush()  # get item.id
         items_created += 1
 
+        # Legacy single-response column (model_name from a `model` column if present).
         response_text = _pick(row, _RESP_COLS)
         if response_text:
-            db.add(
-                Response(
-                    item_id=item.id,
-                    response_text=response_text,
-                    model_name=_pick(row, _MODEL_COLS) or None,
-                )
-            )
+            model = _pick(row, _MODEL_COLS) or "response"
+            db.add(Response(item_id=item.id, response_text=response_text, model_name=model))
             responses_created += 1
+            agents_seen.add(model)
+
+        # One Response per external-agent column that has content (model_name = agent name).
+        for col in agent_cols:
+            text = _clean(row.get(col))
+            if not text:
+                continue
+            model = _agent_name(col)
+            db.add(Response(item_id=item.id, response_text=text, model_name=model))
+            responses_created += 1
+            agents_seen.add(model)
 
     db.commit()
     if items_created == 0:
         raise HTTPException(status_code=400, detail="No valid rows found in CSV")
+    agents_note = f"; agents: {', '.join(sorted(agents_seen))}" if agents_seen else ""
     return IntakeResult(
         items_created=items_created,
         responses_created=responses_created,
         warnings=warnings[:10],
         detail=(f"Replaced {replaced} existing question(s); " if replaced else "")
-        + f"imported {items_created} items ({responses_created} with responses)",
+        + f"imported {items_created} items ({responses_created} response(s){agents_note})",
     )
 
 

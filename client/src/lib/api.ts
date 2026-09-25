@@ -21,6 +21,12 @@ export interface Judgment { id: string; kind: 'llm' | 'human'; rater_id?: string
 export interface Response { id: string; response_text: string; model_name?: string; mlflow_trace_id?: string; judgments: Judgment[] }
 export interface Item { id: string; question: string; expected_answer?: string; source: string; responses: Response[] }
 
+// The response under human validation for an item: Genie's answer if present, else the first one.
+// External agent responses share the item (for the comparison) but aren't the review target.
+export function baselineResponse(it: Item): Response | undefined {
+  return it.responses.find(r => (r.model_name || '').startsWith('genie')) ?? it.responses[0]
+}
+
 export interface JudgeCatalogItem { key: string; label: string; description: string; uses_answer_key: boolean; needs_context: boolean; is_custom: boolean }
 export type GateVerdict = 'pass' | 'review' | 'fail' | 'insufficient'
 export interface TrustGate { verdict: GateVerdict; reason: string; warnings?: string[] }
@@ -76,6 +82,10 @@ export type DisagreementCategory =
   | 'different_interpretation' | 'insufficient_evidence' | 'other'
 export interface DisagreementAudit { category: DisagreementCategory; note?: string; reviewer_id?: string }
 export interface ResultsSummary { summary?: string | null; model?: string; detail?: string; fallback?: boolean; note?: string; n_gold?: number; small_sample?: boolean; at?: string | null }
+// Per-agent comparison (LLM-judge scores for Genie + uploaded external agents).
+export interface AgentDimScore { pass_rate?: number | null; mean?: number | null; n: number }
+export interface AgentRow { model_name: string; label: string; n: number; dimensions: Record<string, AgentDimScore | null> }
+export interface Comparison { scale: Scale; dimensions: { key: string; label: string }[]; agents: AgentRow[]; detail?: string }
 export interface GenerateResult {
   mode: GenerationMode; generated: number; run_id?: string; run_url?: string
   genie_url?: string; experiment_id?: string; experiment_url?: string
@@ -123,6 +133,9 @@ export const api = {
     req<Project>('PUT', `/projects/${id}/blind-review`, { enabled }),
   judgeCatalog: () => req<{ judges: JudgeCatalogItem[]; models: string[] }>('GET', '/judge-catalog'),
   getMetrics: (id: string) => req<Metrics>('GET', `/projects/${id}/metrics`),
+  getComparison: (id: string) => req<Comparison>('GET', `/projects/${id}/comparison`),
+  saveAgentLabels: (id: string, labels: Record<string, string>) =>
+    req<Comparison>('PUT', `/projects/${id}/comparison/labels`, { labels }),
   resultsSummary: (id: string) => req<ResultsSummary>('POST', `/projects/${id}/results-summary`),
   getResultsSummary: (id: string) => req<ResultsSummary>('GET', `/projects/${id}/results-summary`),
   mlflowEval: (id: string) =>

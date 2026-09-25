@@ -18,6 +18,7 @@ from server.database import (
     get_db,
 )
 from server.schemas import (
+    AgentLabels,
     BlindReviewUpdate,
     JudgeConfig,
     MemberInvite,
@@ -122,6 +123,22 @@ def project_metrics(project_id: str, db: Session = Depends(get_db)):
     if A.get_project_or_none(db, project_id) is None:
         raise HTTPException(status_code=404, detail="Project not found")
     return METRICS.project_metrics(db, project_id)
+
+
+@router.get("/{project_id}/comparison")
+def agent_comparison(project_id: str, db: Session = Depends(get_db)):
+    """Per-agent LLM-judge scorecard (Genie + uploaded external agents), for the comparison page."""
+    if A.get_project_or_none(db, project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return METRICS.agent_comparison(db, project_id)
+
+
+@router.put("/{project_id}/comparison/labels")
+def save_agent_labels(project_id: str, body: AgentLabels, db: Session = Depends(get_db)):
+    """Save friendly display names for the agents, then return the refreshed comparison."""
+    if A.get_project_or_none(db, project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return METRICS.save_agent_labels(db, project_id, body.labels)
 
 
 @router.get("/{project_id}/disagreements")

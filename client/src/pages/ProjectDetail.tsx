@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import {
   ArrowLeft, ArrowRight, Check, Upload, Sparkles, FileSpreadsheet, ExternalLink,
   Gavel, UserPlus, ClipboardCheck, BarChart3, Trash2, User as UserIcon, Server,
-  Loader2, Lock, AlertTriangle, Ban, Pencil,
+  Loader2, Lock, AlertTriangle, Ban, Pencil, GitCompare,
 } from 'lucide-react'
 import {
   api, getSession, type GenerationMode, type Item, type JudgeCatalogItem,
@@ -276,9 +276,9 @@ export default function ProjectDetail() {
           status={stats.total ? `${stats.total} question${stats.total > 1 ? 's' : ''} · ${stats.withKey} with an answer key` : 'None yet'}
           open={openStep === 'data'} onToggle={() => toggleStep('data')}
           actionLabel={stats.total ? 'Replace file' : 'Add questions'}>
-          <p className="mb-2 flex items-center gap-1.5 text-sm text-muted-foreground">
+          <p className="mb-2 flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
             <FileSpreadsheet className="h-4 w-4" /> Pipe-delimited columns: <code>question | expected_answer</code>
-            <span className="text-xs">(a <code>response</code> column is optional — skips generation). Use <code>|</code> so commas in text are safe.</span>
+            <span className="text-xs">Add extra columns for external agents to compare — e.g. <code>agent1_response | agent2_response</code> (each becomes a response Genie is compared against). Use <code>|</code> so commas in text are safe.</span>
           </p>
           {stats.total > 0 && (
             <div className="mb-2 flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
@@ -450,6 +450,8 @@ export default function ProjectDetail() {
           open={false} onToggle={() => nav(`/projects/${id}/results`)}
           actionLabel="View results" actionIcon={<BarChart3 className="h-4 w-4" />}
           onAction={() => nav(`/projects/${id}/results`)} inlineAction
+          secondaryLabel="Run comparison analysis" secondaryIcon={<GitCompare className="h-4 w-4" />}
+          onSecondary={() => nav(`/projects/${id}/compare`)}
           locked={stats.graded === 0 && stats.reviewed === 0} />
       </ol>
 
@@ -466,9 +468,10 @@ function Step(props: {
   n: number; title: string; desc: string; status: string; active: boolean; done: boolean
   open: boolean; onToggle: () => void; actionLabel: string; actionIcon?: React.ReactNode
   onAction?: () => void; actionDisabled?: boolean; inlineAction?: boolean; locked?: boolean
+  secondaryLabel?: string; secondaryIcon?: React.ReactNode; onSecondary?: () => void
   children?: React.ReactNode
 }) {
-  const { n, title, desc, status, active, done, open, onToggle, actionLabel, actionIcon, onAction, actionDisabled, inlineAction, locked, children } = props
+  const { n, title, desc, status, active, done, open, onToggle, actionLabel, actionIcon, onAction, actionDisabled, inlineAction, locked, secondaryLabel, secondaryIcon, onSecondary, children } = props
   const isOpen = open && !locked
   return (
     <li>
@@ -489,6 +492,11 @@ function Step(props: {
                     onClick={() => (inlineAction && onAction ? onAction() : onToggle())}>
                     {!locked && actionIcon}{actionLabel}{!inlineAction && !locked && <ArrowRight className="h-4 w-4" />}
                   </Button>
+                  {secondaryLabel && onSecondary && !locked && (
+                    <Button size="sm" variant="outline" onClick={onSecondary}>
+                      {secondaryIcon}{secondaryLabel}
+                    </Button>
+                  )}
                 </div>
               </div>
               <p className="mt-1 text-sm text-muted-foreground">{desc}</p>

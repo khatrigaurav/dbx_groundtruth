@@ -49,6 +49,13 @@ def _concurrency() -> int:
     return max(1, min(_MAX_CONCURRENCY, n))
 
 
+def _has_genie_response(item: Item) -> bool:
+    """Whether Genie has already answered this item. Gate generation on the absence of a GENIE
+    response (not the absence of ALL responses) so an item that already carries uploaded external
+    agent responses still gets its Genie answer generated for the comparison."""
+    return any((r.model_name or "").startswith("genie") for r in item.responses)
+
+
 def _get_run(db: Session, project_id: str) -> GenerationRun | None:
     return db.query(GenerationRun).filter(GenerationRun.project_id == project_id).first()
 
@@ -106,7 +113,7 @@ def _pending_items(db: Session, project_id: str, item_ids: list[str] | None) -> 
     q = db.query(Item).filter(Item.project_id == project_id)
     if item_ids:
         q = q.filter(Item.id.in_(item_ids))
-    return [it for it in q.all() if not it.responses]
+    return [it for it in q.all() if not _has_genie_response(it)]
 
 
 def generate(db: Session, project_id: str, mode: GenerationMode,
@@ -209,7 +216,7 @@ def _worker(project_id: str, item_ids: list[str], exp_id: str | None, mode: str,
         # db session must never cross threads.
         pending = [(it.id, (it.question or "").strip())
                    for it in db.query(Item).filter(Item.id.in_(item_ids)).all()
-                   if not it.responses and (it.question or "").strip()]
+                   if not _has_genie_response(it) and (it.question or "").strip()]
 
         host = get_workspace_host().rstrip("/")
         mcp_url = f"{host}/api/2.0/mcp/genie"
@@ -250,7 +257,7 @@ def _worker(project_id: str, item_ids: list[str], exp_id: str | None, mode: str,
                     errs.append(err)
                 else:
                     item = db.query(Item).filter(Item.id == iid).first()
-                    if item is not None and not item.responses:
+                    if item is not None and not _has_genie_response(item):
                         G.attach_response(db, item, res["answer"], res["generated_sql"],
                                           model, experiment_id=exp_id)
                         generated += 1

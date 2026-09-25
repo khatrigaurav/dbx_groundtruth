@@ -8,6 +8,7 @@ import Projects from './pages/Projects'
 import ProjectDetail from './pages/ProjectDetail'
 import Review from './pages/Review'
 import Results from './pages/Results'
+import Compare from './pages/Compare'
 
 function Shell({ children }: { children: React.ReactNode }) {
   const user = getSession()
@@ -56,6 +57,7 @@ export default function App() {
         <Route path="/projects/:id" element={<RequireFacilitator><ProjectDetail /></RequireFacilitator>} />
         <Route path="/projects/:id/review" element={<RequireAuth><Review /></RequireAuth>} />
         <Route path="/projects/:id/results" element={<RequireFacilitator><Results /></RequireFacilitator>} />
+        <Route path="/projects/:id/compare" element={<RequireFacilitator><Compare /></RequireFacilitator>} />
         <Route path="*" element={<Navigate to="/projects" replace />} />
       </Routes>
     </BrowserRouter>

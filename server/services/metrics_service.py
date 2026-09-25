@@ -388,3 +388,83 @@ def _value(judgment, is_likert: bool) -> float | None:
 
 def _round(x: float | None, ndigits: int = 3) -> float | None:
     return None if x is None else round(x, ndigits)
+
+
+def _pretty_agent(model: str) -> str:
+    """Default display name for an agent (its response model_name). Genie's answer collapses to
+    'Genie'; uploaded external agents keep their column-derived name until the user renames them."""
+    return "Genie" if (model or "").startswith("genie") else (model or "unknown")
+
+
+def agent_comparison(db: Session, project_id: str) -> dict:
+    """Per-agent LLM-judge scorecard: for each response source (model_name), the judge's pass rate
+    (binary) or mean score (likert) per dimension. This is the payoff of validating the judge —
+    once trusted, it scores every agent (Genie + uploaded external agents) so they can be compared.
+    Uses ONLY the LLM judge verdicts (no human panel). Applies saved display names (agent_labels)."""
+    import json
+
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if project is None:
+        return {"detail": "Project not found."}
+    is_likert = project.scale == ProjectScale.LIKERT
+
+    enabled = [pj.judge_key for pj in
+               db.query(ProjectJudge).filter(ProjectJudge.project_id == project_id).all() if pj.enabled]
+    try:
+        labels = json.loads(project.agent_labels) if project.agent_labels else {}
+    except (ValueError, TypeError):
+        labels = {}
+
+    # model_name -> {dim -> [llm values]}, and total responses per model.
+    agg: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
+    counts: dict[str, int] = defaultdict(int)
+    dim_keys: list[str] = list(enabled)
+    for it in db.query(Item).filter(Item.project_id == project_id).all():
+        for r in it.responses:
+            model = r.model_name or "unknown"
+            counts[model] += 1
+            for j in r.judgments:
+                if j.kind != JudgmentKind.LLM:
+                    continue
+                key = j.judge_key or "overall"
+                if key not in dim_keys:
+                    dim_keys.append(key)
+                v = _value(j, is_likert)
+                if v is not None:
+                    agg[model][key].append(v)
+
+    dims = [{"key": k, "label": _dim_label(k)} for k in dim_keys]
+    agents = []
+    for model, n in counts.items():
+        dim_out: dict[str, dict | None] = {}
+        for k in dim_keys:
+            vals = agg.get(model, {}).get(k, [])
+            if not vals:
+                dim_out[k] = None
+            elif is_likert:
+                dim_out[k] = {"mean": _round(sum(vals) / len(vals)), "n": len(vals)}
+            else:
+                dim_out[k] = {"pass_rate": _round(sum(vals) / len(vals)), "n": len(vals)}
+        agents.append({"model_name": model, "label": labels.get(model) or _pretty_agent(model),
+                       "n": n, "dimensions": dim_out})
+    # Genie first, then by display name.
+    agents.sort(key=lambda a: (not a["model_name"].startswith("genie"), a["label"].lower()))
+    return {"scale": "likert" if is_likert else "binary", "dimensions": dims, "agents": agents}
+
+
+def save_agent_labels(db: Session, project_id: str, labels: dict) -> dict:
+    """Persist the {model_name: display name} map for the comparison, then return the refreshed
+    comparison. Best-effort merge with any existing labels."""
+    import json
+
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if project is None:
+        return {"detail": "Project not found."}
+    try:
+        current = json.loads(project.agent_labels) if project.agent_labels else {}
+    except (ValueError, TypeError):
+        current = {}
+    current.update({str(k): str(v) for k, v in (labels or {}).items() if v})
+    project.agent_labels = json.dumps(current)
+    db.commit()
+    return agent_comparison(db, project_id)

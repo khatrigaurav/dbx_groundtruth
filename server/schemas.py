@@ -48,6 +48,11 @@ class BlindReviewUpdate(BaseModel):
     enabled: bool
 
 
+class AgentLabels(BaseModel):
+    # {response model_name -> friendly display name} for the comparison analysis.
+    labels: dict[str, str]
+
+
 class ProjectJudgeOut(BaseModel):
     judge_key: str
     enabled: bool = True

@@ -121,6 +121,9 @@ class Project(Base):
     summary_note = Column(Text, nullable=True)
     summary_model = Column(String(255), nullable=True)
     summary_at = Column(String(40), nullable=True)
+    # Display names for the comparison analysis: JSON map of response model_name -> friendly label
+    # (e.g. {"agent1": "Claude", "agent2": "Claude + MCP"}). Set on the comparison page.
+    agent_labels = Column(Text, nullable=True)
 
     items = relationship("Item", back_populates="project", cascade="all, delete-orphan")
     members = relationship("ProjectMember", back_populates="project", cascade="all, delete-orphan")
@@ -306,6 +309,7 @@ _ADDITIVE_COLUMNS = [
     ("projects", "summary_note", "TEXT"),
     ("projects", "summary_model", "VARCHAR(255)"),
     ("projects", "summary_at", "VARCHAR(40)"),
+    ("projects", "agent_labels", "TEXT"),
     ("judgments", "judge_key", "VARCHAR(64)"),
     ("judgments", "mlflow_assessment_id", "VARCHAR(64)"),
     ("generation_runs", "phase", "VARCHAR(20)"),

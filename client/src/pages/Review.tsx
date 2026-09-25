@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { ArrowLeft, Check, X, ChevronLeft, ChevronRight } from 'lucide-react'
-import { api, getSession, type Item, type JudgeCatalogItem, type Project, type Verdict } from '../lib/api'
+import { api, baselineResponse, getSession, type Item, type JudgeCatalogItem, type Project, type Verdict } from '../lib/api'
 import { cacheGet, cacheKey, cacheSet } from '../lib/cache'
 import { Card, CardContent } from '../components/ui/card'
 import { Button } from '../components/ui/button'
@@ -83,7 +83,7 @@ export default function Review() {
   }, [project, catById])
 
   const item = items[idx]
-  const response = item?.responses[0]
+  const response = item ? baselineResponse(item) : undefined
 
   // A reviewer's stored verdict for one dimension (legacy null-dimension rows count as "overall").
   const myDim = (r: Item['responses'][number] | undefined, dim: string) =>
@@ -114,7 +114,7 @@ export default function Review() {
 
   // Per-item completeness for the navigator (how many dimensions this reviewer has scored).
   const myStates = useMemo(() => items.map(it => {
-    const r = it.responses[0]
+    const r = baselineResponse(it)
     let done = 0
     for (const d of dims) { if (hasSel({ verdict: myDim(r, d.key)?.verdict, score: myDim(r, d.key)?.score ?? undefined })) done++ }
     return { done, total: dims.length }
@@ -126,7 +126,7 @@ export default function Review() {
   // on the scoring path.
   function patchItems(responseId: string, nextSel: Sel, note: string) {
     const apply = (list: Item[]): Item[] => list.map(it => {
-      const r = it.responses[0]
+      const r = baselineResponse(it)
       if (!r || r.id !== responseId) return it
       const judgments = [...r.judgments]
       for (const d of dims) {
@@ -139,7 +139,8 @@ export default function Review() {
           verdict: v.verdict, score: v.score, rationale: note }
         if (at >= 0) judgments[at] = row; else judgments.push(row)
       }
-      return { ...it, responses: [{ ...r, judgments }, ...it.responses.slice(1)] }
+      // Replace the reviewed response by id (it may not be responses[0] once agent responses exist).
+      return { ...it, responses: it.responses.map(rr => rr.id === r.id ? { ...rr, judgments } : rr) }
     })
     setItems(prev => apply(prev))
     const cached = cacheGet<Item[]>(cacheKey('items', id))
