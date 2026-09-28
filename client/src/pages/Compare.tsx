@@ -9,79 +9,13 @@ import { Input } from '../components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { Badge } from '../components/ui/badge'
 import { cn } from '../lib/utils'
+import { PlotlyChart } from '../components/PlotlyChart'
+import type { PlotData, PlotLayout } from 'plotly.js-basic-dist-min'
 
-// Categorical series colors (agents), fixed order — CVD-validated in index.css (--viz-*).
-const VIZ = ['var(--viz-1)', 'var(--viz-2)', 'var(--viz-3)', 'var(--viz-4)', 'var(--viz-5)', 'var(--viz-6)', 'var(--viz-7)', 'var(--viz-8)']
-
-type Series = { label: string; color: string }
-type BarGroup = { label: string; values: (number | null)[] } // values indexed by series
-
-// Grouped vertical bar chart: one bar per series (agent) within each group (dimension). Thin
-// bars with a 3px gap, rounded tops on the baseline, recessive gridlines, direct value labels,
-// per-bar hover title, and a ★ on the leading bar in each group. Legend is rendered by the caller.
-function GroupedBarChart({ groups, series, max, fmtVal }: {
-  groups: BarGroup[]; series: Series[]; max: number; fmtVal: (v: number) => string
-}) {
-  const barW = 30, barGap = 5, groupGap = 36, padL = 40, padT = 28, padB = 42, padR = 14, H = 268
-  const groupW = series.length * barW + (series.length - 1) * barGap
-  const W = padL + groups.length * groupW + (groups.length - 1) * groupGap + padR
-  const plotH = H - padT - padB
-  const baseY = padT + plotH
-  const y = (v: number) => padT + plotH * (1 - v / max)
-  const ticks = max === 1 ? [0, 0.25, 0.5, 0.75, 1] : [0, 1, 2, 3, 4, 5]
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} width={W} style={{ maxWidth: '100%', height: 'auto' }} role="img" aria-label="Agent comparison by dimension">
-      {ticks.map(t => (
-        <g key={t}>
-          <line x1={padL} x2={W - padR} y1={y(t)} y2={y(t)} stroke="hsl(var(--border))" strokeWidth={1} />
-          <text x={padL - 6} y={y(t) + 3} textAnchor="end" fontSize={10} fill="hsl(var(--muted-foreground))">{max === 1 ? `${t * 100}%` : t}</text>
-        </g>
-      ))}
-      {groups.map((g, gi) => {
-        const gx = padL + gi * (groupW + groupGap)
-        const present = g.values.filter((v): v is number => v != null)
-        const best = present.length ? Math.max(...present) : null
-        return (
-          <g key={g.label}>
-            {g.values.map((v, si) => {
-              if (v == null) return null
-              const bx = gx + si * (barW + barGap)
-              const by = y(v)
-              const isBest = series.length > 1 && best != null && v === best
-              return (
-                <g key={si}>
-                  <rect x={bx} y={by} width={barW} height={Math.max(baseY - by, 1)} rx={3} fill={series[si].color}>
-                    <title>{series[si].label} · {g.label}: {fmtVal(v)}</title>
-                  </rect>
-                  {isBest && (
-                    <text x={bx + barW / 2} y={by - 15} textAnchor="middle" fontSize={10} fill="hsl(var(--success))">★</text>
-                  )}
-                  <text x={bx + barW / 2} y={by - 4} textAnchor="middle" fontSize={9} fill="hsl(var(--foreground))">
-                    {fmtVal(v)}
-                  </text>
-                </g>
-              )
-            })}
-            <text x={gx + groupW / 2} y={baseY + 15} textAnchor="middle" fontSize={11} fill="hsl(var(--foreground))">{g.label}</text>
-          </g>
-        )
-      })}
-      <line x1={padL} x2={W - padR} y1={baseY} y2={baseY} stroke="hsl(var(--border))" strokeWidth={1.5} />
-    </svg>
-  )
-}
-
-function Legend({ series }: { series: Series[] }) {
-  return (
-    <div className="flex flex-wrap gap-x-4 gap-y-1">
-      {series.map(s => (
-        <span key={s.label} className="inline-flex items-center gap-1.5 text-xs text-foreground">
-          <span className="h-2.5 w-2.5 rounded-sm" style={{ background: s.color }} />{s.label}
-        </span>
-      ))}
-    </div>
-  )
-}
+// Read a CSS custom property off :root (single source of truth for the brand + --viz-* palette).
+const cssVar = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+// --foreground/--muted-foreground/etc. are space-separated HSL triples; Plotly needs a full color.
+const cssHsl = (name: string) => `hsl(${cssVar(name).replace(/\s+/g, ', ')})`
 
 // Per-agent comparison: the validated LLM judge scores every agent (Genie + uploaded external
 // agents); here we name them and line up their scores per dimension. Kept separate from the
@@ -133,21 +67,68 @@ export default function Compare() {
   const scoreText = (v: number | null | undefined) =>
     v == null ? '—' : isLikert ? `${v.toFixed(2)} / 5` : `${Math.round(v * 100)}%`
 
-  // Chart inputs: agents are the categorical series; groups are dimensions (+ an Overall).
-  const series: Series[] = agents.map((a, i) => ({ label: a.label, color: VIZ[i % VIZ.length] }))
-  const val = (a: AgentRow, dk: string): number | null => {
-    const s = a.dimensions[dk]
-    return (isLikert ? s?.mean : s?.pass_rate) ?? null
-  }
-  const dimGroups: BarGroup[] = dims.map(d => ({ label: d.label, values: agents.map(a => val(a, d.key)) }))
-  const overallGroup: BarGroup[] = [{
-    label: 'Overall', values: agents.map(a => {
-      const vs = dims.map(d => val(a, d.key)).filter((v): v is number => v != null)
-      return vs.length ? vs.reduce((s, x) => s + x, 0) / vs.length : null
-    }),
-  }]
-  const chartMax = isLikert ? 5 : 1
-  const fmtVal = (v: number) => isLikert ? v.toFixed(1) : `${Math.round(v * 100)}%`
+  // Chart: agents are the categorical series (fixed --viz-* order), the x-axis is the dimensions.
+  // One grouped-bar trace per agent, driven by the validated LLM judge scores. Memoized so we only
+  // re-plot when the data actually changes.
+  const { chartData, chartLayout } = useMemo(() => {
+    // Derive from cmp inside the memo so the only dep is the stable comparison object (agents/dims
+    // are freshly spread each render, which would defeat memoization).
+    const agents = cmp?.agents ?? []
+    const dims = cmp?.dimensions ?? []
+    const isLikert = cmp?.scale === 'likert'
+    const val = (a: AgentRow, dk: string): number | null => {
+      const s = a.dimensions[dk]
+      return (isLikert ? s?.mean : s?.pass_rate) ?? null
+    }
+    const viz = [1, 2, 3, 4, 5, 6, 7, 8].map(i => cssVar(`--viz-${i}`))
+    const ink = cssHsl('--foreground')
+    const muted = cssHsl('--muted-foreground')
+    const grid = cssHsl('--border')
+    const font = 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'
+    const fmt = (v: number | null) => v == null ? '' : isLikert ? v.toFixed(2) : `${Math.round(v * 100)}%`
+    const dimLabels = dims.map(d => d.label)
+
+    const chartData: PlotData[] = agents.map((a, i) => {
+      const ys = dims.map(d => val(a, d.key))
+      return {
+        type: 'bar',
+        name: a.label,
+        x: dimLabels,
+        y: ys,
+        marker: { color: viz[i % viz.length] },
+        text: ys.map(fmt),
+        texttemplate: '%{text}',
+        textposition: 'outside',
+        textfont: { size: 10, color: muted, family: font },
+        cliponaxis: false,
+        hovertemplate: `<b>${a.label}</b><br>%{x}: ${isLikert ? '%{y:.2f} / 5' : '%{y:.0%}'}<extra></extra>`,
+      }
+    })
+
+    const chartLayout: Partial<PlotLayout> = {
+      barmode: 'group',
+      bargap: 0.34,
+      bargroupgap: 0.12,
+      height: 320,
+      margin: { l: 46, r: 12, t: 34, b: 46 },
+      paper_bgcolor: 'rgba(0,0,0,0)',
+      plot_bgcolor: 'rgba(0,0,0,0)',
+      font: { family: font, color: ink, size: 12 },
+      xaxis: { fixedrange: true, automargin: true, tickfont: { color: ink, size: 12 } },
+      yaxis: {
+        range: [0, isLikert ? 5.35 : 1.08],
+        dtick: isLikert ? 1 : 0.25,
+        tickformat: isLikert ? undefined : '.0%',
+        gridcolor: grid,
+        zerolinecolor: grid,
+        tickfont: { color: muted, size: 10 },
+        fixedrange: true,
+      },
+      legend: { orientation: 'h', y: 1.14, x: 0, font: { color: ink, size: 12 } },
+      hoverlabel: { font: { family: font } },
+    }
+    return { chartData, chartLayout }
+  }, [cmp])
 
   return (
     <div className="space-y-6">
@@ -198,23 +179,15 @@ export default function Compare() {
             </div>
           </div>
 
-          {/* 2. Charts */}
+          {/* 2. Chart — score by dimension (grouped bars, one per agent) */}
           <div className="space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Score comparison</h2>
-              <Legend series={series} />
-            </div>
-            <Card><CardContent className="space-y-6 py-5">
-              <div>
-                <div className="mb-1 text-xs font-medium text-muted-foreground">
-                  Overall — {isLikert ? 'mean score across dimensions' : 'average judge pass rate across dimensions'}
-                </div>
-                <div className="overflow-x-auto"><GroupedBarChart groups={overallGroup} series={series} max={chartMax} fmtVal={fmtVal} /></div>
-              </div>
-              <div>
-                <div className="mb-1 text-xs font-medium text-muted-foreground">By dimension</div>
-                <div className="overflow-x-auto"><GroupedBarChart groups={dimGroups} series={series} max={chartMax} fmtVal={fmtVal} /></div>
-              </div>
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Score comparison</h2>
+            <p className="text-xs text-muted-foreground">
+              {isLikert ? 'Mean judge score (1–5)' : 'Judge pass rate'} per dimension, one bar per agent.
+              Hover a bar for the exact value; click a legend entry to toggle an agent.
+            </p>
+            <Card><CardContent className="py-5">
+              <PlotlyChart data={chartData} layout={chartLayout} style={{ width: '100%', height: 320 }} />
             </CardContent></Card>
           </div>
 
