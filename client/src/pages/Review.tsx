@@ -86,8 +86,10 @@ export default function Review() {
   const response = item ? baselineResponse(item) : undefined
 
   // A reviewer's stored verdict for one dimension (legacy null-dimension rows count as "overall").
+  // "mine" is stamped server-side (and on optimistic local rows), so re-hydration doesn't depend
+  // on the client session id matching the server-resolved rater_id.
   const myDim = (r: Item['responses'][number] | undefined, dim: string) =>
-    r?.judgments.find(j => j.kind === 'human' && j.rater_id === user?.id
+    r?.judgments.find(j => j.kind === 'human' && j.mine
       && (j.judge_key === dim || (dim === 'overall' && !j.judge_key)))
 
   const hasSel = (v?: { verdict?: Verdict; score?: number }) =>
@@ -132,10 +134,10 @@ export default function Review() {
       for (const d of dims) {
         const v = nextSel[d.key]
         if (!v || (v.verdict == null && v.score == null)) continue
-        const at = judgments.findIndex(j => j.kind === 'human' && j.rater_id === user?.id
+        const at = judgments.findIndex(j => j.kind === 'human' && j.mine
           && (j.judge_key === d.key || (d.key === 'overall' && !j.judge_key)))
         const row = { id: at >= 0 ? judgments[at].id : `local:${responseId}:${d.key}`,
-          kind: 'human' as const, rater_id: user?.id, judge_key: d.key,
+          kind: 'human' as const, rater_id: user?.id, mine: true, judge_key: d.key,
           verdict: v.verdict, score: v.score, rationale: note }
         if (at >= 0) judgments[at] = row; else judgments.push(row)
       }

@@ -38,7 +38,7 @@ def genie_url() -> str | None:
     host = get_workspace_host().rstrip("/")
     if not host:
         return None
-    return os.environ.get("GENIE_ONE_URL", f"{host}/genie")
+    return os.environ.get("GENIE_ONE_URL", f"{host}/one")
 
 
 def _experiment_name(project) -> str:

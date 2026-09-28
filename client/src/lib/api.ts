@@ -17,7 +17,7 @@ export interface Project {
   blind_review: boolean
 }
 export type Verdict = 'pass' | 'fail'
-export interface Judgment { id: string; kind: 'llm' | 'human'; rater_id?: string; judge_key?: string; verdict?: Verdict; score?: number; rationale?: string }
+export interface Judgment { id: string; kind: 'llm' | 'human'; rater_id?: string; judge_key?: string; verdict?: Verdict; score?: number; rationale?: string; mine?: boolean }
 export interface Response { id: string; response_text: string; model_name?: string; mlflow_trace_id?: string; judgments: Judgment[] }
 export interface Item { id: string; question: string; expected_answer?: string; source: string; responses: Response[] }
 

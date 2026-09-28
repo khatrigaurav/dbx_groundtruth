@@ -409,7 +409,7 @@ export default function ProjectDetail() {
                   ? 'Cancelling — in-flight work finishes; nothing new starts.'
                   : prog.phase === 'grading'
                     ? <>Grading with AI judges — {prog.graded ?? 0}{prog.grade_total ? ` of ${prog.grade_total}` : ''} done (batches of 20).</>
-                    : <>Generating via Genie — {stats.answered} of {stats.total} done (batches of 20). Grading runs automatically after.</>}
+                    : <>Generating via Genie — {prog.generated ?? 0}{prog.total ? ` of ${prog.total}` : ''} done (batches of 20). Grading runs automatically after.</>}
               </div>
             )}
             {genError && !generating && (

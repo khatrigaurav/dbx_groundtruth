@@ -107,6 +107,10 @@ class JudgmentOut(BaseModel):
     verdict: Optional[Verdict] = None
     score: Optional[float] = None
     rationale: Optional[str] = None
+    # True when this human verdict belongs to the caller (resolved server-side from the SSO
+    # identity, same as the save path). The client keys "my prior verdicts" on this instead of
+    # comparing a client-held id, so re-hydration survives a stale/reset session id.
+    mine: bool = False
 
 
 class ResponseOut(BaseModel):
