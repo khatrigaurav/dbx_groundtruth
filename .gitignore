@@ -26,3 +26,6 @@ client/node_modules/
 
 # OS
 .DS_Store
+
+# Isaac review tool working dir
+.isaac/
