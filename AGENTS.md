@@ -35,11 +35,12 @@ runbook**.
 
 ## 2. The only edits you make per workspace
 
-Edit **`databricks.yml` → `targets`**. Pick the `samsara` target (or add your own) and set:
+Edit **`databricks.yml` → `targets`**. Rename the handover-slot target key to your project
+(shown here as `<project_target_name>` — replace it with e.g. `acme`) and set:
 
 ```yaml
 targets:
-  samsara:
+  <project_target_name>:                                # rename to your project, e.g. `acme`
     variables:
       serving_endpoint: databricks-claude-sonnet-5      # your workspace's Claude endpoint name
       warehouse_id: <YOUR_WAREHOUSE_ID>                 # any running SQL warehouse in the target
@@ -55,7 +56,7 @@ That is the whole code change. Do **not**:
 
 ```bash
 PROFILE=<your-profile>     # supplies the workspace host
-TARGET=samsara             # the target you edited in step 2
+TARGET=<project_target_name>   # the target you named in step 2
 
 databricks bundle validate -t "$TARGET" -p "$PROFILE"
 databricks bundle deploy   -t "$TARGET" -p "$PROFILE"

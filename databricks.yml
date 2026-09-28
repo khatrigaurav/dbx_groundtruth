@@ -6,8 +6,8 @@
 #
 # Nothing here hardcodes a workspace: the host comes from the CLI profile you pass
 # with `-p`, and the per-workspace values (warehouse, serving endpoint) are variables
-# you set per target. This is what makes the Samsara handover (Phase 4) a config edit,
-# not a code edit.
+# you set per target. This is what makes handing the app to a new workspace a config
+# edit, not a code edit.
 
 bundle:
   name: groundtruth
@@ -130,8 +130,9 @@ targets:
     variables:
       warehouse_id: 02a94469833e5b5e   # your dev workspace's warehouse
 
-  # Phase 4 handover: Samsara deploys with their own profile + their warehouse.
-  samsara:
+  # Handover slot: rename this key to your project (e.g. `acme`) and deploy with your
+  # own profile + warehouse. `-t <project_target_name>` then selects it.
+  <project_target_name>:
     variables:
       serving_endpoint: databricks-claude-sonnet-5
-      warehouse_id: REPLACE_WITH_SAMSARA_WAREHOUSE_ID
+      warehouse_id: REPLACE_WITH_YOUR_WAREHOUSE_ID

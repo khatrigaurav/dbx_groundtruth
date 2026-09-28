@@ -50,14 +50,14 @@ Edit `databricks.yml` → `targets`. Nothing else needs changing to move workspa
 - `serving_endpoint` — defaults to `databricks-claude-sonnet-5`; change if the workspace's
   Claude endpoint has a different name.
 
-The `dev` target is Gaurav's; the `samsara` target is the handover slot — fill in your own
-`warehouse_id` and deploy with your own profile.
+The `dev` target is Gaurav's; the `<project_target_name>` target is the handover slot — rename
+it to your project, fill in your own `warehouse_id`, and deploy with your own profile.
 
 ### 2. Deploy the bundle (builds the frontend for you)
 
 ```bash
 PROFILE=<your-profile>          # supplies the workspace host — nothing hardcoded
-TARGET=samsara                  # or `dev`
+TARGET=<project_target_name>    # the target you set above, or `dev`
 
 databricks bundle validate -t "$TARGET" -p "$PROFILE"   # sanity check
 databricks bundle deploy   -t "$TARGET" -p "$PROFILE"    # builds + creates resources + deploys
