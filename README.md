@@ -50,7 +50,7 @@ Edit `databricks.yml` → `targets`. Nothing else needs changing to move workspa
 - `serving_endpoint` — defaults to `databricks-claude-sonnet-5`; change if the workspace's
   Claude endpoint has a different name.
 
-The `dev` target is Gaurav's; the `<project_target_name>` target is the handover slot — rename
+The `dev` target is  local ; the `<project_target_name>` target is the handover slot — rename
 it to your project, fill in your own `warehouse_id`, and deploy with your own profile.
 
 ### 2. Deploy the bundle (builds the frontend for you)
